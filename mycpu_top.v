@@ -63,10 +63,16 @@ wire        need_rd;
 wire        rj_hit;
 wire        rk_hit;
 wire        rd_hit;
+wire        reg_EX_hit;
+wire        reg_MEM_hit;
+wire        reg_WB_hit;
 wire        hit_wait;
 wire [4: 0] dest_EX_ID;
 wire [4: 0] dest_MEM_ID;
 wire [4: 0] dest_WB_ID;
+wire [31:0] rj_pro;
+wire [31:0] rk_pro;
+wire [31:0] rd_pro;
 
 wire [ 5:0] op_31_26;
 wire [ 3:0] op_25_22;
@@ -333,7 +339,7 @@ assign need_si26  =  inst_b | inst_bl;
 assign src2_is_4  =  inst_jirl | inst_bl;
 
 assign need_rj    =  ~(inst_b | inst_bl | inst_lu12i_w);
-assign need_rk    =  inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_and | inst_nor | inst_xor;
+assign need_rk    =  inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_and | inst_or |inst_nor | inst_xor;
 assign need_rd    =  inst_beq | inst_bne | inst_st_w;
 
 assign dest_EX_ID = dest_EX & {5{gr_we_EX}} & {5{ID_valid}};
@@ -344,7 +350,23 @@ assign rj_hit = need_rj && (rj != 5'd0) && ((rj == dest_EX_ID) || (rj == dest_ME
 assign rk_hit = need_rk && (rk != 5'd0) && ((rk == dest_EX_ID) || (rk == dest_MEM_ID) || (rk == dest_WB_ID));
 assign rd_hit = need_rd && (rd != 5'd0) && ((rd == dest_EX_ID) || (rd == dest_MEM_ID) || (rd == dest_WB_ID));
 
-assign hit_wait = rj_hit || rk_hit || rd_hit;
+assign reg_EX_hit = need_rj && (rj != 5'd0) && (rj == dest_EX_ID) || need_rk && (rk != 5'd0) && (rk == dest_EX_ID) || need_rd && (rd != 5'd0) && (rd == dest_EX_ID);
+assign reg_MEM_hit = need_rj && (rj != 5'd0) && (rj == dest_MEM_ID) || need_rk && (rk != 5'd0) && (rk == dest_MEM_ID) || need_rd && (rd != 5'd0) && (rd == dest_MEM_ID);
+assign reg_WB_hit = need_rj && (rj != 5'd0) && (rj == dest_WB_ID) || need_rk && (rk != 5'd0) && (rk == dest_WB_ID) || need_rd && (rd != 5'd0) && (rd == dest_WB_ID);
+
+assign rj_pro = (rj == dest_EX_ID) ? alu_result :
+                (rj == dest_MEM_ID) ? data_sram_addr_MEM :
+                final_result ;
+
+assign rk_pro = (rk == dest_EX_ID) ? alu_result :
+                (rk == dest_MEM_ID) ? data_sram_addr_MEM :
+                final_result ;
+
+assign rd_pro = (rd == dest_EX_ID) ? alu_result :
+                (rd == dest_MEM_ID) ? data_sram_addr_MEM :
+                final_result ;
+
+assign hit_wait = reg_EX_hit && data_sram_en_EX || reg_MEM_hit && data_sram_en_MEM;
 
 assign imm = src2_is_4 ? 32'h4                      :
              need_si20 ? {i20[19:0], 12'b0}         :
@@ -430,8 +452,10 @@ regfile u_regfile(
     .wdata  (rf_wdata )
     );
 
-assign rj_value  = rf_rdata1;
-assign rkd_value = rf_rdata2;
+assign rj_value  = rj_hit ? rj_pro : rf_rdata1;
+assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
+                  !src_reg_is_rd && rk_hit ? rk_pro :
+                  rf_rdata2;
 
 assign rj_eq_rd = (rj_value == rkd_value);
 assign br_taken = (   inst_beq  &&  rj_eq_rd
