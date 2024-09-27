@@ -122,16 +122,6 @@ wire        inst_srl_w;
 wire        inst_sra_w;
 wire        inst_pcaddu12i;
 
-
-
-
-
-
-
-
-
-
-
 wire        need_ui5;
 wire        need_si12;
 wire        need_ui12;
@@ -182,9 +172,6 @@ reg        gr_we_EX;
 reg        gr_we_MEM;
 reg        gr_we_WB;
 
-
-
-
 //添加握手信号
 reg IF_valid;
 wire IF_allowin;
@@ -206,7 +193,8 @@ reg WB_valid;
 wire WB_allowin;
 wire WB_readygo;
 
-//考虑冲突
+//握手信号处理
+/****************************************************************************/
 assign IF_readygo = valid_r ? !hit_wait : 1'b1;
 assign ID_readygo = 1'b1;
 assign EX_readygo = 1'b1;
@@ -223,7 +211,7 @@ assign WB_allowin = (!WB_valid  ||                WB_readygo )&&valid;
 always @(posedge clk) begin
     if (reset)
 		IF_valid <= 1'b0;
-    else if (br_taken && IF_allowin)
+    else if (br_taken && IF_allowin)//分支跳转则把预取的错误指令取消
         IF_valid <= 1'b0;
 	else if(IF_allowin)
 		IF_valid <= 1'b1;
@@ -252,10 +240,13 @@ always @(posedge clk) begin
 	else if(WB_allowin)
 		WB_valid <= MEM_valid && MEM_readygo;
 end
+/****************************************************************************/
 
+
+//PC值处理
+/****************************************************************************/
 assign seq_pc       = pc + 3'h4;
 assign nextpc       = valid_r ? (br_taken ? br_target : seq_pc) : seq_pc;
-
 
 //依次传递pc值，以便最后对比信号
 always @(posedge clk) begin
@@ -290,14 +281,30 @@ always @(posedge clk) begin
     else if(MEM_allowin && EX_valid && EX_readygo)
         pc_WB <= pc_MEM;
 end
+/****************************************************************************/
 
 
+//IF流水级
+/****************************************************************************/
 assign inst_sram_en    = IF_allowin;
 assign inst_sram_we    = 4'b0;
 assign inst_sram_addr  = pc;
 assign inst_sram_wdata = 32'b0;
 assign inst = inst_sram_rdata;
+/****************************************************************************/
 
+
+
+// IF  --->  ID
+
+// inst      指令
+// PC_ID
+
+
+
+//ID流水级
+/****************************************************************************/
+//译码
 assign op_31_26  = inst[31:26];
 assign op_25_22  = inst[25:22];
 assign op_21_20  = inst[21:20];
@@ -370,6 +377,8 @@ assign need_si20  =  inst_lu12i_w|inst_pcaddu12i;
 assign need_si26  =  inst_b | inst_bl;
 assign src2_is_4  =  inst_jirl | inst_bl;
 
+
+/******** 前递块 ********/
 assign need_rj    =  ~(inst_b | inst_bl | inst_lu12i_w);
 assign need_rk    =  inst_add_w | inst_sub_w | inst_slt |inst_slti| inst_sltu | inst_sltiu | inst_and | inst_or |inst_nor | inst_xor|inst_sll_w|inst_srl_w|inst_sra_w;
 assign need_rd    =  inst_beq | inst_bne | inst_st_w;
@@ -399,6 +408,8 @@ assign rd_pro = (rd == dest_EX_ID) ? alu_result :
                 final_result ;
 
 assign hit_wait = reg_EX_hit && data_sram_en_EX || reg_MEM_hit && data_sram_en_MEM;
+/******** 前递块 ********/
+
 
 assign imm = src2_is_4 ? 32'h4                      :
              need_si20 ? {i20[19:0], 12'b0}         :
@@ -428,7 +439,7 @@ assign src2_is_imm   = inst_slli_w |
                        inst_andi   |
                        inst_ori    |
                        inst_xori   |
-                       inst_pcaddu12i;//xingai
+                       inst_pcaddu12i;
 
 assign res_from_mem  = inst_ld_w;
 assign dst_is_r1     = inst_bl;
@@ -436,48 +447,8 @@ assign gr_we         = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b;
 assign mem_we        = inst_st_w;
 assign dest          = dst_is_r1 ? 5'd1 : rd;
 
-//将一些后续控制信号从ID阶段传递下去
-always @(posedge clk) begin
-    if(reset) begin
-        res_from_mem_EX <= 1'b0;
-        dest_EX <= 5'd0;
-        gr_we_EX <= 1'b0;
-    end
-    else if(ID_allowin && IF_valid && IF_readygo) begin
-        res_from_mem_EX <= res_from_mem;
-        dest_EX <= dest;
-        gr_we_EX <= gr_we;
-    end
-end
-always @(posedge clk) begin
-    if(reset) begin
-        res_from_mem_MEM <= 1'b0;
-        dest_MEM <= 5'd0;
-        gr_we_MEM <= 1'b0;
-    end
-    else if(EX_allowin && ID_valid && ID_readygo) begin
-        res_from_mem_MEM <= res_from_mem_EX;
-        dest_MEM <= dest_EX;
-        gr_we_MEM <= gr_we_EX;
-    end
-end
-always @(posedge clk) begin
-    if(reset) begin
-        alu_result_WB <= 32'h0;
-        res_from_mem_WB <= 1'b0;
-        dest_WB <= 5'd0;
-        gr_we_WB <= 1'b0;
-    end
-    else if(MEM_allowin && EX_valid && EX_readygo) begin
-        alu_result_WB <= data_sram_addr_MEM;
-        res_from_mem_WB <= res_from_mem_MEM;
-        dest_WB <= dest_MEM;
-        gr_we_WB <= gr_we_MEM;
-    end
-end
 
-
-
+/******** 寄存器读取块 ********/
 assign rf_raddr1 = rj;
 assign rf_raddr2 = src_reg_is_rd ? rd :rk;
 regfile u_regfile(
@@ -495,7 +466,10 @@ assign rj_value  = rj_hit ? rj_pro : rf_rdata1;
 assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
                   !src_reg_is_rd && rk_hit ? rk_pro :
                   rf_rdata2;
+/******** 寄存器读取块 ********/
 
+
+/******** 分支判断块 ********/
 assign rj_eq_rd = (rj_value == rkd_value);
 assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_bne  && !rj_eq_rd
@@ -505,10 +479,15 @@ assign br_taken = (   inst_beq  &&  rj_eq_rd
                   ) && IF_valid;
 assign br_target = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_ID + br_offs) :
                                                    /*inst_jirl*/ (rj_value + jirl_offs);
+/******** 分支判断块 ********/
 
 
 assign alu_src1 = src1_is_pc  ? pc_ID[31:0] : rj_value;
 assign alu_src2 = src2_is_imm ? imm : rkd_value;
+
+assign data_sram_en_ID    = inst_ld_w || inst_st_w;
+assign data_sram_we_ID    = {4{mem_we && valid}};
+assign data_sram_wdata_ID = rkd_value;
 
 //将alu输入保存到EX阶段并使用
 always @(posedge clk) begin
@@ -523,21 +502,20 @@ always @(posedge clk) begin
         alu_op_r   <= alu_op;
     end
 end
-
-alu u_alu(
-    .alu_op     (alu_op_r    ),
-    .alu_src1   (alu_src1_r  ),
-    .alu_src2   (alu_src2_r  ),
-    .alu_result (alu_result)
-    );
-
-//传递访存控制信号
-assign data_sram_en_ID    = inst_ld_w || inst_st_w;
-assign data_sram_we_ID    = {4{mem_we && valid}};
-assign data_sram_addr_EX  = alu_result;
-assign data_sram_wdata_ID = rkd_value;
-
-always @(posedge clk) begin
+//将一些后续控制信号从ID阶段传递下去
+always @(posedge clk) begin //寄存器控制
+    if(reset) begin
+        res_from_mem_EX <= 1'b0;
+        dest_EX <= 5'd0;
+        gr_we_EX <= 1'b0;
+    end
+    else if(ID_allowin && IF_valid && IF_readygo) begin
+        res_from_mem_EX <= res_from_mem;
+        dest_EX <= dest;
+        gr_we_EX <= gr_we;
+    end
+end
+always @(posedge clk) begin //访存控制
     if(reset) begin
         data_sram_en_EX <= 1'b0;
         data_sram_we_EX <= 4'b0;
@@ -549,7 +527,31 @@ always @(posedge clk) begin
         data_sram_wdata_EX <= data_sram_wdata_ID;
     end
 end
-always @(posedge clk) begin
+/****************************************************************************/
+
+
+//ID --> EX
+
+// alu_src1_r, alu_src2_r, alu_op_r      alu相关信号
+// res_from_mem_EX, dest_EX, gr_we_EX      寄存器相关信号
+// data_sram_en_EX, data_sram_we_EX, data_sram_wdata_EX      访存相关信号
+// PC_EX
+
+
+
+//EX流水级
+/****************************************************************************/
+alu u_alu(// alu进行运算
+    .alu_op     (alu_op_r    ),
+    .alu_src1   (alu_src1_r  ),
+    .alu_src2   (alu_src2_r  ),
+    .alu_result (alu_result)
+    );
+
+assign data_sram_addr_EX  = alu_result;//设计访存地址
+
+//将一些后续控制信号从EX传递下去
+always @(posedge clk) begin//访存控制
     if(reset) begin
         data_sram_en_MEM <= 1'b0;
         data_sram_we_MEM <= 4'b0;
@@ -563,19 +565,75 @@ always @(posedge clk) begin
         data_sram_wdata_MEM <= data_sram_wdata_EX;
     end
 end
+always @(posedge clk) begin//寄存器控制
+    if(reset) begin
+        res_from_mem_MEM <= 1'b0;
+        dest_MEM <= 5'd0;
+        gr_we_MEM <= 1'b0;
+    end
+    else if(EX_allowin && ID_valid && ID_readygo) begin
+        res_from_mem_MEM <= res_from_mem_EX;
+        dest_MEM <= dest_EX;
+        gr_we_MEM <= gr_we_EX;
+    end
+end
+/****************************************************************************/
 
-//将数据以及控制信号均改为流动到该级的数据与信号
+
+
+//EX --> MEM
+
+// data_sram_en_MEM, data_sram_we_MEM, data_sram_addr_MEM, data_sram_wdata_MEM      访存相关信号
+// res_from_mem_MEM, dest_MEM, gr_we_MEM      寄存器相关信号
+// PC_MEM
+
+
+
+//MEM流水级
+/****************************************************************************/
+//设置访存信号
 assign data_sram_en = data_sram_en_MEM;
 assign data_sram_we = data_sram_we_MEM;
 assign data_sram_addr = data_sram_addr_MEM;
 assign data_sram_wdata = data_sram_wdata_MEM;
 
+//将一些后续控制信号从MEM传递下去
+always @(posedge clk) begin
+    if(reset) begin
+        alu_result_WB <= 32'h0;
+        res_from_mem_WB <= 1'b0;
+        dest_WB <= 5'd0;
+        gr_we_WB <= 1'b0;
+    end
+    else if(MEM_allowin && EX_valid && EX_readygo) begin
+        alu_result_WB <= data_sram_addr_MEM;
+        res_from_mem_WB <= res_from_mem_MEM;
+        dest_WB <= dest_MEM;
+        gr_we_WB <= gr_we_MEM;
+    end
+end
+
 assign mem_result   = data_sram_rdata;
-assign final_result = res_from_mem_WB ? mem_result : alu_result_WB;
+/****************************************************************************/
+
+
+
+//MEM --> WB
+
+// res_from_mem_WB, dest_WB, gr_we_WB      寄存器相关信号
+// mem_result, alu_result_WB      访存及寄存器结果
+// PC_WB
+
+
+//WB流水级
+/****************************************************************************/
+assign final_result = res_from_mem_WB ? mem_result : alu_result_WB; // 最终写回数据
 
 assign rf_we    = gr_we_WB && MEM_valid && MEM_readygo;
 assign rf_waddr = dest_WB;
 assign rf_wdata = final_result;
+/****************************************************************************/
+
 
 // debug info generate
 assign debug_wb_pc       = pc_WB;
