@@ -262,7 +262,7 @@ assign nextpc       = valid_r ? (br_taken ? br_target : seq_pc) : seq_pc;
 //依次传递pc值，以便最后对比信号
 always @(posedge clk) begin
     if (reset) begin
-        pc <= 32'h1bfffffc;     //trick: to make nextpc be 0x1c000000 during reset 
+        pc <= 32'h1c000000;     //trick: to make nextpc be 0x1c000000 during reset 
     end
     else if(IF_allowin)begin
         pc <= nextpc;
