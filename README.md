@@ -8,7 +8,7 @@
 
 ### 添加更多用户态指令
 #### exp10   - (10-01)
-- [ ]  算术逻辑运算类指令 `slti`， `sltui`， `andi`， `ori`， `xori`， `sll`， `srl`， `sra`， `pcaddu12i`；
+- [x]  算术逻辑运算类指令 `slti`， `sltui`， `andi`， `ori`， `xori`， `sll`， `srl`， `sra`， `pcaddu12i`；
 - [ ]  乘除运算类指令`mul.w`, `mulh.w`, `mulh.wu`, `div.w`, `mod.w`, `div.wu`, `mod.wu`;
 #### exp11   - (10-08)
 - [ ]  转移指令`blt`， `bge`， `bltu`， `bgeu`;
