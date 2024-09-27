@@ -1,5 +1,0 @@
-vhdl xil_defaultlib  \
-"../../../../../../rtl/xilinx_ip/div_gen_signed/sim/div_gen_signed.vhd" \
-
-# Do not sort compile order
-nosort
