@@ -42,7 +42,7 @@ wire [31:0] br_target;
 wire [31:0] inst;
 reg  [31:0] pc;
 
-wire [11:0] alu_op;
+wire [14:0] alu_op;
 wire        load_op;
 wire        src1_is_pc;
 wire        src2_is_imm;
@@ -141,6 +141,13 @@ wire [31:0] rf_wdata;
 wire [31:0] alu_src1   ;
 wire [31:0] alu_src2   ;
 wire [31:0] alu_result ;
+wire        need_div;
+wire        div_unsigned;
+wire        div_signed;
+wire        get_div_or_mod;
+wire [63:0] sdiv_result;
+wire [63:0] udiv_result;
+wire [31:0] EX_final_result;
 wire [31:0] final_result;
 wire [31:0] mem_result;
 
@@ -153,7 +160,11 @@ wire [31:0] data_sram_wdata_ID;
 reg [31:0] pc_ID, pc_EX, pc_MEM, pc_WB;
 reg [31:0] alu_src1_r;
 reg [31:0] alu_src2_r;
-reg [11:0] alu_op_r;
+reg [14:0] alu_op_r;
+reg        need_div_r;
+reg        div_unsigned_r;
+reg        div_signed_r;
+reg        get_div_or_mod_r;
 reg        data_sram_en_EX;
 reg        data_sram_en_MEM;
 reg [ 3:0] data_sram_we_EX;
@@ -195,8 +206,8 @@ wire WB_readygo;
 
 //握手信号处理
 /****************************************************************************/
-assign IF_readygo = valid_r ? !hit_wait : 1'b1;
-assign ID_readygo = 1'b1;
+assign IF_readygo = valid_r ? !hit_wait : 1'b1;//访存前递阻塞
+assign ID_readygo = !need_div_r;//阻塞除法
 assign EX_readygo = 1'b1;
 assign MEM_readygo = 1'b1;
 assign WB_readygo = 1'b1;
@@ -344,16 +355,24 @@ assign inst_bl     = op_31_26_d[6'h15];
 assign inst_beq    = op_31_26_d[6'h16];
 assign inst_bne    = op_31_26_d[6'h17];
 assign inst_lu12i_w= op_31_26_d[6'h05] & ~inst[25];
-//新添加指令有效信号
-assign inst_slti   = op_31_26_d[6'h00] & op_25_22_d[4'h8];
-assign inst_sltiu  = op_31_26_d[6'h00] & op_25_22_d[4'h9];
-assign inst_andi   = op_31_26_d[6'h00] & op_25_22_d[4'h13];
-assign inst_ori    = op_31_26_d[6'h00] & op_25_22_d[4'h14];
-assign inst_xori   = op_31_26_d[6'h00] & op_25_22_d[4'h15];
-assign inst_sll_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h14];
-assign inst_srl_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h15];
-assign inst_sra_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h16];
-assign inst_pcaddu12i = op_31_26_d[6'h07] & ~inst[25];
+//新添加算术逻辑运算指令有效信号
+assign inst_slti     = op_31_26_d[6'h00] & op_25_22_d[4'h8];
+assign inst_sltiu    = op_31_26_d[6'h00] & op_25_22_d[4'h9];
+assign inst_andi     = op_31_26_d[6'h00] & op_25_22_d[4'hd];
+assign inst_ori      = op_31_26_d[6'h00] & op_25_22_d[4'he];
+assign inst_xori     = op_31_26_d[6'h00] & op_25_22_d[4'hf];
+assign inst_sll_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h0e];
+assign inst_srl_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h0f];
+assign inst_sra_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h10];
+assign inst_pcaddu12i= op_31_26_d[6'h07] & ~inst[25];
+//新添加乘除运算指令有效信号
+assign inst_mul_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h18];
+assign inst_mulh_w   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h19];
+assign inst_mulh_wu  = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h1] & op_19_15_d[5'h1a];
+assign inst_div_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h00];
+assign inst_mod_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h01];
+assign inst_div_wu   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h02];
+assign inst_mod_wu   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h03];
 
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
                     | inst_jirl | inst_bl|inst_pcaddu12i;
@@ -368,6 +387,9 @@ assign alu_op[ 8] = inst_slli_w|inst_sll_w;
 assign alu_op[ 9] = inst_srli_w|inst_srl_w;
 assign alu_op[10] = inst_srai_w|inst_sra_w;
 assign alu_op[11] = inst_lu12i_w;
+assign alu_op[12] = inst_mul_w;
+assign alu_op[13] = inst_mulh_w;
+assign alu_op[14] = inst_mulh_wu;
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
 assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w|inst_slti | inst_sltiu;//改动
@@ -395,15 +417,15 @@ assign reg_EX_hit = need_rj && (rj != 5'd0) && (rj == dest_EX_ID) || need_rk && 
 assign reg_MEM_hit = need_rj && (rj != 5'd0) && (rj == dest_MEM_ID) || need_rk && (rk != 5'd0) && (rk == dest_MEM_ID) || need_rd && (rd != 5'd0) && (rd == dest_MEM_ID);
 assign reg_WB_hit = need_rj && (rj != 5'd0) && (rj == dest_WB_ID) || need_rk && (rk != 5'd0) && (rk == dest_WB_ID) || need_rd && (rd != 5'd0) && (rd == dest_WB_ID);
 
-assign rj_pro = (rj == dest_EX_ID) ? alu_result :
+assign rj_pro = (rj == dest_EX_ID) ? EX_final_result :
                 (rj == dest_MEM_ID) ? data_sram_addr_MEM :
                 final_result ;
 
-assign rk_pro = (rk == dest_EX_ID) ? alu_result :
+assign rk_pro = (rk == dest_EX_ID) ? EX_final_result :
                 (rk == dest_MEM_ID) ? data_sram_addr_MEM :
                 final_result ;
 
-assign rd_pro = (rd == dest_EX_ID) ? alu_result :
+assign rd_pro = (rd == dest_EX_ID) ? EX_final_result :
                 (rd == dest_MEM_ID) ? data_sram_addr_MEM :
                 final_result ;
 
@@ -414,7 +436,7 @@ assign hit_wait = reg_EX_hit && data_sram_en_EX || reg_MEM_hit && data_sram_en_M
 assign imm = src2_is_4 ? 32'h4                      :
              need_si20 ? {i20[19:0], 12'b0}         :
              need_ui12 ? {{20{1'b0}}, i12[11:0]} :
-/*need_ui5 || need_si12*/{{20{i12[11]}}, i12[11:0]} :;//gaidong
+/*need_ui5 || need_si12*/{{20{i12[11]}}, i12[11:0]} ;//gaidong
 
 assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
                              {{14{i16[15]}}, i16[15:0], 2'b0} ;
@@ -484,22 +506,32 @@ assign br_target = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_ID + br_off
 
 assign alu_src1 = src1_is_pc  ? pc_ID[31:0] : rj_value;
 assign alu_src2 = src2_is_imm ? imm : rkd_value;
+assign need_div = inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu; 
+assign div_signed = inst_div_w | inst_mod_w;
+assign div_unsigned = inst_div_wu | inst_mod_wu;
+assign get_div_or_mod = inst_div_w | inst_div_wu;
 
 assign data_sram_en_ID    = inst_ld_w || inst_st_w;
 assign data_sram_we_ID    = {4{mem_we && valid}};
 assign data_sram_wdata_ID = rkd_value;
 
-//将alu输入保存到EX阶段并使用
+//将alu及除法器输入保存到EX阶段并使用
 always @(posedge clk) begin
     if(reset) begin
         alu_src1_r <= 32'h0;
         alu_src2_r <= 32'h0;
-        alu_op_r   <= 12'h0;
+        alu_op_r   <= 15'h0;
+        div_signed_r <= 1'b0;
+        div_unsigned_r <= 1'b0;
+        get_div_or_mod_r <= 1'b0;
     end
     else if(IF_valid && ID_allowin && IF_readygo)begin
         alu_src1_r <= alu_src1;
         alu_src2_r <= alu_src2;
         alu_op_r   <= alu_op;
+        div_signed_r <= div_signed;
+        div_unsigned_r <= div_unsigned;
+        get_div_or_mod_r <= get_div_or_mod;
     end
 end
 //将一些后续控制信号从ID阶段传递下去
@@ -535,12 +567,58 @@ end
 // alu_src1_r, alu_src2_r, alu_op_r      alu相关信号
 // res_from_mem_EX, dest_EX, gr_we_EX      寄存器相关信号
 // data_sram_en_EX, data_sram_we_EX, data_sram_wdata_EX      访存相关信号
+// sdiv_sor_valid, sdiv_dend_valid, need_div_r      除法器相关信号
 // PC_EX
 
+
+/********除法器模块********/
+reg  sdiv_sor_valid, sdiv_dend_valid;
+wire sdiv_sor_ready, sdiv_dend_ready, sdiv_out_valid;
+reg  udiv_sor_valid, udiv_dend_valid;
+wire udiv_sor_ready, udiv_dend_ready, udiv_out_valid;
+always @(posedge clk) begin
+    if(reset) begin
+        sdiv_sor_valid <= 1'b0;
+        sdiv_dend_valid <= 1'b0;
+        udiv_sor_valid <= 1'b0;
+        udiv_dend_valid <= 1'b0;
+    end
+    else if(IF_valid && ID_allowin && IF_readygo) begin
+        sdiv_sor_valid <= div_signed;
+        sdiv_dend_valid <= div_signed;
+        udiv_sor_valid <= div_unsigned;
+        udiv_dend_valid <= div_unsigned;
+    end
+    if (sdiv_sor_ready || sdiv_dend_ready) begin
+        sdiv_sor_valid <= !sdiv_sor_ready && sdiv_sor_valid;
+        sdiv_dend_valid <= !sdiv_dend_ready && sdiv_dend_valid;
+    end
+    if (udiv_sor_ready || udiv_dend_ready) begin
+        udiv_sor_valid <= !udiv_sor_ready && udiv_sor_valid;
+        udiv_dend_valid <= !udiv_dend_ready && udiv_dend_valid;
+    end
+
+end
+always @(posedge clk) begin
+    if(reset) begin
+        need_div_r <= 1'b0;
+    end
+    else if(IF_valid && ID_allowin && IF_readygo) begin
+        need_div_r <= need_div;
+    end
+    else if (sdiv_out_valid) begin
+        need_div_r <= 1'b0;
+    end
+end
+/********除法器模块********/
 
 
 //EX流水级
 /****************************************************************************/
+
+
+
+
 alu u_alu(// alu进行运算
     .alu_op     (alu_op_r    ),
     .alu_src1   (alu_src1_r  ),
@@ -548,7 +626,34 @@ alu u_alu(// alu进行运算
     .alu_result (alu_result)
     );
 
-assign data_sram_addr_EX  = alu_result;//设计访存地址
+div_gen_signed u_div_gen_signed(// 进行符号除法运算
+    .aclk                   (clk         ),
+    .s_axis_divisor_tdata   (alu_src1_r  ),
+    .s_axis_divisor_tvalid  (sdiv_sor_valid),
+    .s_axis_divisor_tready  (sdiv_sor_ready),
+    .s_axis_dividend_tdata  (alu_src2_r  ),
+    .s_axis_dividend_tvalid (sdiv_dend_valid),
+    .s_axis_dividend_tready (sdiv_dend_ready),
+    .m_axis_dout_tdata      (sdiv_result  ),
+    .m_axis_dout_tvalid     (sdiv_out_valid)
+    );
+
+div_gen_unsigned u_div_gen_unsigned(// 进行无符号除法运算
+    .aclk                   (clk         ),
+    .s_axis_divisor_tdata   (alu_src1_r  ),
+    .s_axis_divisor_tvalid  (udiv_sor_valid),
+    .s_axis_divisor_tready  (udiv_sor_ready),
+    .s_axis_dividend_tdata  (alu_src2_r  ),
+    .s_axis_dividend_tvalid (udiv_dend_valid),
+    .s_axis_dividend_tready (udiv_dend_ready),
+    .m_axis_dout_tdata      (udiv_result  ),
+    .m_axis_dout_tvalid     (udiv_out_valid)
+    );
+
+assign EX_final_result =  div_signed_r ? (get_div_or_mod_r ? sdiv_result[63:32] : sdiv_result[31:0]):
+                          div_unsigned_r ? (get_div_or_mod_r ? udiv_result[63:32] : udiv_result[31:0]):
+                          alu_result;
+assign data_sram_addr_EX  = EX_final_result;//设计访存地址
 
 //将一些后续控制信号从EX传递下去
 always @(posedge clk) begin//访存控制
