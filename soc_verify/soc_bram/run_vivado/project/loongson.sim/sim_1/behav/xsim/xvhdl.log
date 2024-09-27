@@ -1,0 +1,4 @@
+INFO: [VRFC 10-163] Analyzing VHDL file "D:/VScode/course/ca-lab/prj3/exp10/mycpu_env/soc_verify/soc_bram/rtl/xilinx_ip/div_gen_unsigned/sim/div_gen_unsigned.vhd" into library xil_defaultlib
+INFO: [VRFC 10-3107] analyzing entity 'div_gen_unsigned'
+INFO: [VRFC 10-163] Analyzing VHDL file "D:/VScode/course/ca-lab/prj3/exp10/mycpu_env/soc_verify/soc_bram/rtl/xilinx_ip/div_gen_signed/sim/div_gen_signed.vhd" into library xil_defaultlib
+INFO: [VRFC 10-3107] analyzing entity 'div_gen_signed'

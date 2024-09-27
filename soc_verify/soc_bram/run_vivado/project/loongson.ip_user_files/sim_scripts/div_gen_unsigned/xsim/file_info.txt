@@ -1,0 +1,2 @@
+div_gen_unsigned.vhd,vhdl,xil_defaultlib,../../../../../../rtl/xilinx_ip/div_gen_unsigned/sim/div_gen_unsigned.vhd,
+glbl.v,Verilog,xil_defaultlib,glbl.v
