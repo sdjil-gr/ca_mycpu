@@ -402,7 +402,8 @@ assign src2_is_4  =  inst_jirl | inst_bl;
 
 /******** 前递块 ********/
 assign need_rj    =  ~(inst_b | inst_bl | inst_lu12i_w);
-assign need_rk    =  inst_add_w | inst_sub_w | inst_slt |inst_slti| inst_sltu | inst_sltiu | inst_and | inst_or |inst_nor | inst_xor|inst_sll_w|inst_srl_w|inst_sra_w;
+assign need_rk    =  inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_and | inst_or | inst_nor | inst_xor | inst_sll_w | inst_srl_w | inst_sra_w |
+                inst_mul_w | inst_mulh_w | inst_mulh_wu | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu; 
 assign need_rd    =  inst_beq | inst_bne | inst_st_w;
 
 assign dest_EX_ID = dest_EX & {5{gr_we_EX}} & {5{ID_valid}};
@@ -606,7 +607,7 @@ always @(posedge clk) begin
     else if(IF_valid && ID_allowin && IF_readygo) begin
         need_div_r <= need_div;
     end
-    else if (sdiv_out_valid) begin
+    else if (sdiv_out_valid || udiv_out_valid)  begin
         need_div_r <= 1'b0;
     end
 end
@@ -628,10 +629,10 @@ alu u_alu(// alu进行运算
 
 div_gen_signed u_div_gen_signed(// 进行符号除法运算
     .aclk                   (clk         ),
-    .s_axis_divisor_tdata   (alu_src1_r  ),
+    .s_axis_divisor_tdata   (alu_src2_r  ),
     .s_axis_divisor_tvalid  (sdiv_sor_valid),
     .s_axis_divisor_tready  (sdiv_sor_ready),
-    .s_axis_dividend_tdata  (alu_src2_r  ),
+    .s_axis_dividend_tdata  (alu_src1_r  ),
     .s_axis_dividend_tvalid (sdiv_dend_valid),
     .s_axis_dividend_tready (sdiv_dend_ready),
     .m_axis_dout_tdata      (sdiv_result  ),
@@ -640,10 +641,10 @@ div_gen_signed u_div_gen_signed(// 进行符号除法运算
 
 div_gen_unsigned u_div_gen_unsigned(// 进行无符号除法运算
     .aclk                   (clk         ),
-    .s_axis_divisor_tdata   (alu_src1_r  ),
+    .s_axis_divisor_tdata   (alu_src2_r  ),
     .s_axis_divisor_tvalid  (udiv_sor_valid),
     .s_axis_divisor_tready  (udiv_sor_ready),
-    .s_axis_dividend_tdata  (alu_src2_r  ),
+    .s_axis_dividend_tdata  (alu_src1_r  ),
     .s_axis_dividend_tvalid (udiv_dend_valid),
     .s_axis_dividend_tready (udiv_dend_ready),
     .m_axis_dout_tdata      (udiv_result  ),
