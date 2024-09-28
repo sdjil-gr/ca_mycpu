@@ -95,7 +95,7 @@ wire [32:0] mul_a, mul_b;
 wire [65:0] mul_result;
 assign mul_a = {alu_src1[31]&&!op_mulhu,alu_src1};
 assign mul_b = {alu_src2[31]&&!op_mulhu,alu_src2};
-assign mul_result = mul_a * mul_b;
+assign mul_result = $signed(mul_a) * $signed(mul_b);
 
 // final result mux
 assign alu_result = ({32{op_add|op_sub}} & add_sub_result)
