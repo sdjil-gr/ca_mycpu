@@ -9,12 +9,14 @@
 - [x]  算术逻辑运算类指令 `slti`， `sltui`， `andi`， `ori`， `xori`， `sll`， `srl`， `sra`， `pcaddu12i`；
 - [x]  乘除运算类指令`mul.w`, `mulh.w`, `mulh.wu`, `div.w`, `mod.w`, `div.wu`, `mod.wu`;
 - [x]  debug;
+
 FINISH exp10 AT 2024/9/28
 
 #### exp11   - (10-08)
 - [x]  转移指令`blt`， `bge`， `bltu`， `bgeu`;
 - [x]  访存指令`ld.b`， `ld.h`， `ld.bu`， `ld.hu`， `st.b`， `st.h`；
 - [x]  debug
+
 FINISH exp11 AT 2024/10/4
 
 ## 任务
