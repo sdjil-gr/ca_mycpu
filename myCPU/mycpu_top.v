@@ -53,9 +53,13 @@ wire        src_reg_is_rd;
 wire [4: 0] dest;
 wire [31:0] rj_value;
 wire [31:0] rkd_value;
+wire [32:0] rj_sign;
+wire [32:0] rd_sign;
 wire [31:0] imm;
 wire [31:0] br_offs;
 wire [31:0] jirl_offs;
+wire        rj_eq_rd;
+wire        rj_lt_rd;
 wire        need_rj;
 wire        need_rk;
 wire        need_rd;
@@ -175,11 +179,10 @@ wire [31:0] mem_result;
 wire        data_sram_en_ID;
 wire [ 3:0] data_sram_we_ID;
 wire [31:0] data_sram_addr_EX;
-wire [ 2:0] data_sram_addroffset;
+wire [ 1:0] data_sram_addroffset;
 wire [31:0] data_sram_wdata_ID;
 wire [ 2:0] data_sram_ld_tag;
 wire [31:0] data_sram_rdata_off;
-wire [31:0] st_data;
 
 //流水级间的寄存器
 reg [31:0] pc_ID, pc_EX, pc_MEM, pc_WB;
@@ -199,6 +202,8 @@ reg [31:0] data_sram_wdata_EX;
 reg [31:0] data_sram_wdata_MEM;
 reg [ 2:0] data_sram_ld_tag_EX;
 reg [ 2:0] data_sram_ld_tag_MEM;
+reg [ 2:0] data_sram_ld_tag_WB;
+reg [ 1:0] data_sram_addroffset_WB;
 reg        res_from_mem_EX;
 reg        res_from_mem_MEM;
 reg        res_from_mem_WB;
@@ -539,21 +544,19 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
 
 
 /******** 分支判断块 ********/
-wire rj_lt_rds;
-wire rj_lt_rdu;
-assign rj_lt_rds = (rj_value[31]==1'b1&&rkd_value[31]==1'b0) ? 1'b1 : 
-(rj_value[31]==1'b0&&rkd_value[31]==1'b1) ? 1'b0 : 
-(rj_value[31]==1'b0&&rkd_value[31]==1'b0)? (rj_value <  rkd_value) : 
-(rj_value[31]==1'b1&&rkd_value[31]==1'b1) ? (rj_value[30:0] <  rkd_value[30:0]) : 1'b0;
 
-assign rj_lt_rdu = (rj_value <  rkd_value);
+assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
+assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
+
+assign rj_lt_rd = $signed(rj_sign) < $signed(rd_sign);
+
 assign rj_eq_rd = (rj_value == rkd_value);
 assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_bne  && !rj_eq_rd
-                   || inst_blt  &&  rj_lt_rds
-                   || inst_bge  &&  !rj_lt_rds
-                   || inst_bltu &&  rj_lt_rdu
-                   || inst_bgeu &&  !rj_lt_rdu
+                   || inst_blt  &&  rj_lt_rd
+                   || inst_bge  &&  !rj_lt_rd
+                   || inst_bltu &&  rj_lt_rd
+                   || inst_bgeu &&  !rj_lt_rd
                    || inst_jirl
                    || inst_bl
                    || inst_b
@@ -754,7 +757,7 @@ end
 
 //EX --> MEM
 
-// data_sram_en_MEM, data_sram_we_MEM, data_sram_addr_MEM, data_sram_wdata_MEM      访存相关信号
+// data_sram_en_MEM, data_sram_we_MEM, data_sram_addr_MEM, data_sram_wdata_MEM, data_sram_ld_tag_MEM      访存相关信号
 // res_from_mem_MEM, dest_MEM, gr_we_MEM      寄存器相关信号
 // PC_MEM
 
@@ -776,18 +779,22 @@ always @(posedge clk) begin
         res_from_mem_WB <= 1'b0;
         dest_WB <= 5'd0;
         gr_we_WB <= 1'b0;
+        data_sram_ld_tag_WB <= 3'b0;
+        data_sram_addroffset_WB <= 2'b0;
     end
     else if(MEM_allowin && EX_valid && EX_readygo) begin
         alu_result_WB <= data_sram_addr_MEM;
         res_from_mem_WB <= res_from_mem_MEM;
         dest_WB <= dest_MEM;
         gr_we_WB <= gr_we_MEM;
+        data_sram_ld_tag_WB <= data_sram_ld_tag_MEM;
+        data_sram_addroffset_WB <= data_sram_addroffset;
     end
 end
 
-assign data_sram_rdata_off = data_sram_rdata >> (data_sram_addroffset * 8);
-assign mem_result   = data_sram_ld_tag_MEM[2]? {{24{data_sram_rdata_off[7] & ~data_sram_ld_tag_MEM[0]}}, data_sram_rdata_off[7:0]} :
-                      data_sram_ld_tag_MEM[1]? {{16{data_sram_rdata_off[15] & ~data_sram_ld_tag_MEM[0]}}, data_sram_rdata_off[15:0]} :
+assign data_sram_rdata_off = data_sram_rdata >> (data_sram_addroffset_WB * 8);
+assign mem_result   = data_sram_ld_tag_WB[2]? {{24{data_sram_rdata_off[7] & ~data_sram_ld_tag_WB[0]}}, data_sram_rdata_off[7:0]} :
+                      data_sram_ld_tag_WB[1]? {{16{data_sram_rdata_off[15] & ~data_sram_ld_tag_WB[0]}}, data_sram_rdata_off[15:0]} :
                       data_sram_rdata_off;
 /****************************************************************************/
 
