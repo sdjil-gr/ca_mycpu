@@ -49,14 +49,17 @@ wire        src2_is_imm;
 wire        res_from_mem;
 wire        dst_is_r1;
 wire        gr_we;
-wire        mem_we;
 wire        src_reg_is_rd;
 wire [4: 0] dest;
 wire [31:0] rj_value;
 wire [31:0] rkd_value;
+wire [32:0] rj_sign;
+wire [32:0] rd_sign;
 wire [31:0] imm;
 wire [31:0] br_offs;
 wire [31:0] jirl_offs;
+wire        rj_eq_rd;
+wire        rj_lt_rd;
 wire        need_rj;
 wire        need_rk;
 wire        need_rd;
@@ -111,7 +114,7 @@ wire        inst_bl;
 wire        inst_beq;
 wire        inst_bne;
 wire        inst_lu12i_w;
-//新添加指令
+//算术逻辑运算
 wire        inst_slti;
 wire        inst_sltiu;
 wire        inst_andi;
@@ -121,6 +124,28 @@ wire        inst_sll_w;
 wire        inst_srl_w;
 wire        inst_sra_w;
 wire        inst_pcaddu12i;
+//乘除指令
+wire        inst_mul_w;
+wire        inst_mulh_w;  
+wire        inst_mulh_wu; 
+wire        inst_div_w;
+wire        inst_mod_w;  
+wire        inst_div_wu;  
+wire        inst_mod_wu; 
+//访存指令
+wire        inst_ld_b;
+wire        inst_ld_h;
+wire        inst_ld_bu;
+wire        inst_ld_hu;
+wire        inst_st_b;
+wire        inst_st_h;
+//分支指令
+wire        inst_blt;
+wire        inst_bge;
+wire        inst_bltu;
+wire        inst_bgeu;
+
+
 
 wire        need_ui5;
 wire        need_si12;
@@ -154,7 +179,10 @@ wire [31:0] mem_result;
 wire        data_sram_en_ID;
 wire [ 3:0] data_sram_we_ID;
 wire [31:0] data_sram_addr_EX;
+wire [ 1:0] data_sram_addroffset;
 wire [31:0] data_sram_wdata_ID;
+wire [ 2:0] data_sram_ld_tag;
+wire [31:0] data_sram_rdata_off;
 
 //流水级间的寄存器
 reg [31:0] pc_ID, pc_EX, pc_MEM, pc_WB;
@@ -172,6 +200,10 @@ reg [ 3:0] data_sram_we_MEM;
 reg [31:0] data_sram_addr_MEM;
 reg [31:0] data_sram_wdata_EX;
 reg [31:0] data_sram_wdata_MEM;
+reg [ 2:0] data_sram_ld_tag_EX;
+reg [ 2:0] data_sram_ld_tag_MEM;
+reg [ 2:0] data_sram_ld_tag_WB;
+reg [ 1:0] data_sram_addroffset_WB;
 reg        res_from_mem_EX;
 reg        res_from_mem_MEM;
 reg        res_from_mem_WB;
@@ -373,9 +405,22 @@ assign inst_div_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] &
 assign inst_mod_w    = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h01];
 assign inst_div_wu   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h02];
 assign inst_mod_wu   = op_31_26_d[6'h00] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h03];
+//新添加访存指令有效信号
+assign inst_ld_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h0];
+assign inst_ld_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h1];
+assign inst_st_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h4];
+assign inst_st_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h5];
+assign inst_ld_bu  = op_31_26_d[6'h0a] & op_25_22_d[4'h8];
+assign inst_ld_hu  = op_31_26_d[6'h0a] & op_25_22_d[4'h9];
+//新添加分支指令有效信号
+assign inst_blt     = op_31_26_d[6'h18];
+assign inst_bge     = op_31_26_d[6'h19];
+assign inst_bltu    = op_31_26_d[6'h1a];
+assign inst_bgeu    = op_31_26_d[6'h1b];
 
-assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_w | inst_st_w
-                    | inst_jirl | inst_bl|inst_pcaddu12i;
+
+assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
+                    | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
 assign alu_op[ 1] = inst_sub_w;
 assign alu_op[ 2] = inst_slt|inst_slti;
 assign alu_op[ 3] = inst_sltu|inst_sltiu;
@@ -392,9 +437,10 @@ assign alu_op[13] = inst_mulh_w;
 assign alu_op[14] = inst_mulh_wu;
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
-assign need_si12  =  inst_addi_w | inst_ld_w | inst_st_w|inst_slti | inst_sltiu;//改动
+assign need_si12  =  inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
+                     | inst_st_b | inst_st_h | inst_st_w | inst_slti | inst_sltiu;
 assign need_ui12  =  inst_andi | inst_ori | inst_xori;
-assign need_si16  =  inst_jirl | inst_beq | inst_bne;
+assign need_si16  =  inst_jirl | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu;
 assign need_si20  =  inst_lu12i_w|inst_pcaddu12i;
 assign need_si26  =  inst_b | inst_bl;
 assign src2_is_4  =  inst_jirl | inst_bl;
@@ -404,7 +450,7 @@ assign src2_is_4  =  inst_jirl | inst_bl;
 assign need_rj    =  ~(inst_b | inst_bl | inst_lu12i_w);
 assign need_rk    =  inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_and | inst_or | inst_nor | inst_xor | inst_sll_w | inst_srl_w | inst_sra_w |
                 inst_mul_w | inst_mulh_w | inst_mulh_wu | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu; 
-assign need_rd    =  inst_beq | inst_bne | inst_st_w;
+assign need_rd    =  inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu;
 
 assign dest_EX_ID = dest_EX & {5{gr_we_EX}} & {5{ID_valid}};
 assign dest_MEM_ID = dest_MEM & {5{gr_we_MEM}} & {5{EX_valid}};
@@ -444,15 +490,21 @@ assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
 
 assign jirl_offs = {{14{i16[15]}}, i16[15:0], 2'b0};
 
-assign src_reg_is_rd = inst_beq | inst_bne | inst_st_w;
+assign src_reg_is_rd = inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu;
 
-assign src1_is_pc    = inst_jirl | inst_bl|inst_pcaddu12i;
+assign src1_is_pc    = inst_jirl | inst_bl | inst_pcaddu12i;
 
 assign src2_is_imm   = inst_slli_w |
                        inst_srli_w |
                        inst_srai_w |
                        inst_addi_w |
+                       inst_ld_b   |
+                       inst_ld_h   |
+                       inst_ld_bu  |
+                       inst_ld_hu  |
                        inst_ld_w   |
+                       inst_st_b   |
+                       inst_st_h   |
                        inst_st_w   |
                        inst_lu12i_w|
                        inst_jirl   |
@@ -464,10 +516,9 @@ assign src2_is_imm   = inst_slli_w |
                        inst_xori   |
                        inst_pcaddu12i;
 
-assign res_from_mem  = inst_ld_w;
+assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
 assign dst_is_r1     = inst_bl;
-assign gr_we         = ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b;
-assign mem_we        = inst_st_w;
+assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu;
 assign dest          = dst_is_r1 ? 5'd1 : rd;
 
 
@@ -493,14 +544,24 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
 
 
 /******** 分支判断块 ********/
+
+assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
+assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
+
+assign rj_lt_rd = $signed(rj_sign) < $signed(rd_sign);
+
 assign rj_eq_rd = (rj_value == rkd_value);
 assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_bne  && !rj_eq_rd
+                   || inst_blt  &&  rj_lt_rd
+                   || inst_bge  &&  !rj_lt_rd
+                   || inst_bltu &&  rj_lt_rd
+                   || inst_bgeu &&  !rj_lt_rd
                    || inst_jirl
                    || inst_bl
                    || inst_b
                   ) && IF_valid;
-assign br_target = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_ID + br_offs) :
+assign br_target = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_ID + br_offs) :
                                                    /*inst_jirl*/ (rj_value + jirl_offs);
 /******** 分支判断块 ********/
 
@@ -512,9 +573,12 @@ assign div_signed = inst_div_w | inst_mod_w;
 assign div_unsigned = inst_div_wu | inst_mod_wu;
 assign get_div_or_mod = inst_div_w | inst_div_wu;
 
-assign data_sram_en_ID    = inst_ld_w || inst_st_w;
-assign data_sram_we_ID    = {4{mem_we && valid}};
-assign data_sram_wdata_ID = rkd_value;
+assign data_sram_en_ID    = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w;
+assign data_sram_we_ID    = {4{inst_st_w}} | {2'b00, {2{inst_st_h}}} | {3'b000, inst_st_b};
+assign data_sram_wdata_ID = inst_st_b ? {4{rkd_value[ 7:0]}} :
+                            inst_st_h ? {2{rkd_value[15:0]}} :
+                            rkd_value;
+assign data_sram_ld_tag = {{inst_ld_b | inst_ld_bu}, {inst_ld_h | inst_ld_hu}, {inst_ld_bu | inst_ld_hu}};// {byte_en, half_en, unsigned_en}
 
 //将alu及除法器输入保存到EX阶段并使用
 always @(posedge clk) begin
@@ -553,11 +617,13 @@ always @(posedge clk) begin //访存控制
         data_sram_en_EX <= 1'b0;
         data_sram_we_EX <= 4'b0;
         data_sram_wdata_EX <= 32'h0;
+        data_sram_ld_tag_EX <= 3'b0;
     end
     else if(IF_valid && ID_allowin && IF_readygo) begin
         data_sram_en_EX <= data_sram_en_ID;
         data_sram_we_EX <= data_sram_we_ID;
         data_sram_wdata_EX <= data_sram_wdata_ID;
+        data_sram_ld_tag_EX <= data_sram_ld_tag;
     end
 end
 /****************************************************************************/
@@ -663,12 +729,14 @@ always @(posedge clk) begin//访存控制
         data_sram_we_MEM <= 4'b0;
         data_sram_addr_MEM <= 32'h0;
         data_sram_wdata_MEM <= 32'h0;
+        data_sram_ld_tag_MEM <= 3'b0;
     end
     else if(EX_allowin && ID_valid && ID_readygo) begin
         data_sram_en_MEM <= data_sram_en_EX;
-        data_sram_we_MEM <= data_sram_we_EX;
+        data_sram_we_MEM <= (data_sram_we_EX << alu_result[1:0]);
         data_sram_addr_MEM <= data_sram_addr_EX;
         data_sram_wdata_MEM <= data_sram_wdata_EX;
+        data_sram_ld_tag_MEM <= data_sram_ld_tag_EX;
     end
 end
 always @(posedge clk) begin//寄存器控制
@@ -689,7 +757,7 @@ end
 
 //EX --> MEM
 
-// data_sram_en_MEM, data_sram_we_MEM, data_sram_addr_MEM, data_sram_wdata_MEM      访存相关信号
+// data_sram_en_MEM, data_sram_we_MEM, data_sram_addr_MEM, data_sram_wdata_MEM, data_sram_ld_tag_MEM      访存相关信号
 // res_from_mem_MEM, dest_MEM, gr_we_MEM      寄存器相关信号
 // PC_MEM
 
@@ -700,7 +768,8 @@ end
 //设置访存信号
 assign data_sram_en = data_sram_en_MEM;
 assign data_sram_we = data_sram_we_MEM;
-assign data_sram_addr = data_sram_addr_MEM;
+assign data_sram_addr = {data_sram_addr_MEM[31:2], 2'b00};//对齐地址
+assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
 assign data_sram_wdata = data_sram_wdata_MEM;
 
 //将一些后续控制信号从MEM传递下去
@@ -710,16 +779,23 @@ always @(posedge clk) begin
         res_from_mem_WB <= 1'b0;
         dest_WB <= 5'd0;
         gr_we_WB <= 1'b0;
+        data_sram_ld_tag_WB <= 3'b0;
+        data_sram_addroffset_WB <= 2'b0;
     end
     else if(MEM_allowin && EX_valid && EX_readygo) begin
         alu_result_WB <= data_sram_addr_MEM;
         res_from_mem_WB <= res_from_mem_MEM;
         dest_WB <= dest_MEM;
         gr_we_WB <= gr_we_MEM;
+        data_sram_ld_tag_WB <= data_sram_ld_tag_MEM;
+        data_sram_addroffset_WB <= data_sram_addroffset;
     end
 end
 
-assign mem_result   = data_sram_rdata;
+assign data_sram_rdata_off = data_sram_rdata >> (data_sram_addroffset_WB * 8);
+assign mem_result   = data_sram_ld_tag_WB[2]? {{24{data_sram_rdata_off[7] & ~data_sram_ld_tag_WB[0]}}, data_sram_rdata_off[7:0]} :
+                      data_sram_ld_tag_WB[1]? {{16{data_sram_rdata_off[15] & ~data_sram_ld_tag_WB[0]}}, data_sram_rdata_off[15:0]} :
+                      data_sram_rdata_off;
 /****************************************************************************/
 
 

@@ -16,7 +16,7 @@ FINISH exp10 AT 2024/9/28
 ### 添加更多用户态指令
 #### exp11   - (10-08)
 - [ ]  转移指令`blt`， `bge`， `bltu`， `bgeu`;
-- [ ]  访存指令`ld.b`， `ld.h`， `ld.bu`， `ld.hu`， `st.b`， `st.h`；
+- [x]  访存指令`ld.b`， `ld.h`， `ld.bu`， `ld.hu`， `st.b`， `st.h`；
 - [ ]  debug
 
 ## 其他
