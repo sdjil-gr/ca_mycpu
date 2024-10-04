@@ -1,0 +1,107 @@
+From 0cff8e6905b5004c491624686427b82dbd2f5c22 Mon Sep 17 00:00:00 2001
+From: liuyu22c <liuyu22c@mails.ucas.ac.cn>
+Date: Sat, 5 Oct 2024 00:11:19 +0800
+Subject: [PATCH 4/5] fix: Add branch instructions
+
+---
+ myCPU/mycpu_top.v | 35 ++++++++++++++++++++++++++++++-----
+ 1 file changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/myCPU/mycpu_top.v b/myCPU/mycpu_top.v
+index a8a4a1a..9cecf8d 100644
+--- a/myCPU/mycpu_top.v
++++ b/myCPU/mycpu_top.v
+@@ -135,6 +135,13 @@ wire        inst_ld_bu;
+ wire        inst_ld_hu;
+ wire        inst_st_b;
+ wire        inst_st_h;
++//分支指令
++wire        inst_blt;
++wire        inst_bge;
++wire        inst_bltu;
++wire        inst_bgeu;
++
++
+ 
+ wire        need_ui5;
+ wire        need_si12;
+@@ -400,6 +407,12 @@ assign inst_st_b   = op_31_26_d[6'h0a] & op_25_22_d[4'h4];
+ assign inst_st_h   = op_31_26_d[6'h0a] & op_25_22_d[4'h5];
+ assign inst_ld_bu  = op_31_26_d[6'h0a] & op_25_22_d[4'h8];
+ assign inst_ld_hu  = op_31_26_d[6'h0a] & op_25_22_d[4'h9];
++//新添加分支指令有效信号
++assign inst_blt     = op_31_26_d[6'h18];
++assign inst_bge     = op_31_26_d[6'h19];
++assign inst_bltu    = op_31_26_d[6'h1a];
++assign inst_bgeu    = op_31_26_d[6'h1b];
++
+ 
+ assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
+                     | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
+@@ -422,7 +435,7 @@ assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
+ assign need_si12  =  inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
+                      | inst_st_b | inst_st_h | inst_st_w | inst_slti | inst_sltiu;
+ assign need_ui12  =  inst_andi | inst_ori | inst_xori;
+-assign need_si16  =  inst_jirl | inst_beq | inst_bne;
++assign need_si16  =  inst_jirl | inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu;
+ assign need_si20  =  inst_lu12i_w|inst_pcaddu12i;
+ assign need_si26  =  inst_b | inst_bl;
+ assign src2_is_4  =  inst_jirl | inst_bl;
+@@ -432,7 +445,7 @@ assign src2_is_4  =  inst_jirl | inst_bl;
+ assign need_rj    =  ~(inst_b | inst_bl | inst_lu12i_w);
+ assign need_rk    =  inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_and | inst_or | inst_nor | inst_xor | inst_sll_w | inst_srl_w | inst_sra_w |
+                 inst_mul_w | inst_mulh_w | inst_mulh_wu | inst_div_w | inst_mod_w | inst_div_wu | inst_mod_wu; 
+-assign need_rd    =  inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w;
++assign need_rd    =  inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu;
+ 
+ assign dest_EX_ID = dest_EX & {5{gr_we_EX}} & {5{ID_valid}};
+ assign dest_MEM_ID = dest_MEM & {5{gr_we_MEM}} & {5{EX_valid}};
+@@ -472,7 +485,7 @@ assign br_offs = need_si26 ? {{ 4{i26[25]}}, i26[25:0], 2'b0} :
+ 
+ assign jirl_offs = {{14{i16[15]}}, i16[15:0], 2'b0};
+ 
+-assign src_reg_is_rd = inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w;
++assign src_reg_is_rd = inst_beq | inst_bne | inst_st_b | inst_st_h | inst_st_w | inst_blt | inst_bge | inst_bltu | inst_bgeu;
+ 
+ assign src1_is_pc    = inst_jirl | inst_bl | inst_pcaddu12i;
+ 
+@@ -500,7 +513,7 @@ assign src2_is_imm   = inst_slli_w |
+ 
+ assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
+ assign dst_is_r1     = inst_bl;
+-assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b;
++assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu;
+ assign dest          = dst_is_r1 ? 5'd1 : rd;
+ 
+ 
+@@ -526,14 +539,26 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
+ 
+ 
+ /******** 分支判断块 ********/
++wire rj_lt_rds;
++wire rj_lt_rdu;
++assign rj_lt_rds = (rj_value[31]==1'b1&&rkd_value[31]==1'b0) ? 1'b1 : 
++(rj_value[31]==1'b0&&rkd_value[31]==1'b1) ? 1'b0 : 
++(rj_value[31]==1'b0&&rkd_value[31]==1'b0)? (rj_value <  rkd_value) : 
++(rj_value[31]==1'b1&&rkd_value[31]==1'b1) ? (rj_value[30:0] <  rkd_value[30:0]) : 1'b0;
++
++assign rj_lt_rdu = (rj_value <  rkd_value);
+ assign rj_eq_rd = (rj_value == rkd_value);
+ assign br_taken = (   inst_beq  &&  rj_eq_rd
+                    || inst_bne  && !rj_eq_rd
++                   || inst_blt  &&  rj_lt_rds
++                   || inst_bge  &&  !rj_lt_rds
++                   || inst_bltu &&  rj_lt_rdu
++                   || inst_bgeu &&  !rj_lt_rdu
+                    || inst_jirl
+                    || inst_bl
+                    || inst_b
+                   ) && IF_valid;
+-assign br_target = (inst_beq || inst_bne || inst_bl || inst_b) ? (pc_ID + br_offs) :
++assign br_target = (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_ID + br_offs) :
+                                                    /*inst_jirl*/ (rj_value + jirl_offs);
+ /******** 分支判断块 ********/
+ 
+-- 
+2.44.0.windows.1
+
