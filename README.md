@@ -6,20 +6,32 @@
 
 ### 添加更多用户态指令
 #### exp10
-- [x]  算术逻辑运算类指令 `slti`， `sltui`， `andi`， `ori`， `xori`， `sll`， `srl`， `sra`， `pcaddu12i`；
+- [x]  算术逻辑运算类指令 `slti`， `sltui`， `andi`， `ori`， `xori`， `sll`， `srl`， `sra`， `pcaddu12i`;
 - [x]  乘除运算类指令`mul.w`, `mulh.w`, `mulh.wu`, `div.w`, `mod.w`, `div.wu`, `mod.wu`;
 - [x]  debug;
 
 FINISH exp10 AT 2024/9/28
 
-#### exp11   - (10-08)
+#### exp11
 - [x]  转移指令`blt`， `bge`， `bltu`， `bgeu`;
-- [x]  访存指令`ld.b`， `ld.h`， `ld.bu`， `ld.hu`， `st.b`， `st.h`；
-- [x]  debug
+- [x]  访存指令`ld.b`， `ld.h`， `ld.bu`， `ld.hu`， `st.b`， `st.h`;
+- [x]  debug;
 
 FINISH exp11 AT 2024/10/4
 
 ## 任务
+
+### 支持异常与中断
+#### exp12
+- [ ]  为 CPU 增加`csrrd`、`csrwr`、`csrxchg` 和 `ertn` 指令;
+- [ ]  为 CPU 增加控制状态寄存器`CRMD`、`PRMD`、`ESTAT`、`ERA`、`EENTRY`、`SAVE0~3`;
+- [ ]  为 CPU 增加`syscall` 指令，实现系统调用异常支持;
+
+#### exp13
+- [ ]  为 CPU 增加取指地址错`ADEF`、地址非对齐`ALE`、断点`BRK`和指令不存在`INE`异常的支持;
+- [ ]  为 CPU 增加中断的支持，包括2个软件中断、8个硬件中断和定时器中断;
+- [ ]  为 CPU 增加控制状态寄存器`ECFG`、`BADV`、`TID`、`TCFG`、`TVAL`、`TICLR`;
+- [ ]  为 CPU 增加`rdcntvl.w`、`rdcntvh.w` 和 `rdcntid` 指令;
 
 
 ## 其他
