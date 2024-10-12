@@ -19,13 +19,15 @@ FINISH exp10 AT 2024/9/28
 
 FINISH exp11 AT 2024/10/4
 
-## 任务
-
 ### 支持异常与中断
 #### exp12
-- [ ]  为 CPU 增加`csrrd`、`csrwr`、`csrxchg` 和 `ertn` 指令;
-- [ ]  为 CPU 增加控制状态寄存器`CRMD`、`PRMD`、`ESTAT`、`ERA`、`EENTRY`、`SAVE0~3`;
-- [ ]  为 CPU 增加`syscall` 指令，实现系统调用异常支持;
+- [x]  为 CPU 增加`csrrd`、`csrwr`、`csrxchg` 和 `ertn` 指令;
+- [x]  为 CPU 增加控制状态寄存器`CRMD`、`PRMD`、`ESTAT`、`ERA`、`EENTRY`、`SAVE0~3`;
+- [x]  为 CPU 增加`syscall` 指令，实现系统调用异常支持;
+
+FINISH exp12 AT 2024/10/12
+
+## 任务
 
 #### exp13
 - [ ]  为 CPU 增加取指地址错`ADEF`、地址非对齐`ALE`、断点`BRK`和指令不存在`INE`异常的支持;
