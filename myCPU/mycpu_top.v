@@ -35,9 +35,6 @@ always @(posedge clk) begin
     end
 end
 
-wire wb_ex;
-wire ertn_flush;
-
 wire [31:0] seq_pc;
 wire [31:0] nextpc;
 wire        br_taken;
@@ -91,7 +88,6 @@ wire [11:0] i12;
 wire [19:0] i20;
 wire [15:0] i16;
 wire [25:0] i26;
-wire [13:0] csr_num;
 
 wire [63:0] op_31_26_d;
 wire [15:0] op_25_22_d;
@@ -166,34 +162,20 @@ wire        inst_ertn;
 wire        inst_syscall;
 
 
-//CSR寄存器CRMD、PRMD、ESTAT、ERA、EENTRY、SAVE0~3
-reg [1:0] csr_crmd_plv;
-reg csr_crmd_ie;
-reg csr_crmd_da;
-reg csr_crmd_pg;
-reg [1:0] csr_crmd_datf;
-reg [1:0] csr_crmd_datm;
-reg [1:0] csr_prmd_pplv;
-reg csr_prmd_pie;
-reg [12:0]csr_estat_is;
-reg [5:0] csr_estat_ecode;
-reg [8:0] csr_estat_esubcode;
-reg [31:0]csr_era_pc;
-reg [25:0]csr_eentry_va;
-reg [31:0]csr_save0;
-reg [31:0]csr_save1;
-reg [31:0]csr_save2;
-reg [31:0]csr_save3;
 
-wire csr_re;
-wire [31:0] csr_rvalue;
 wire csr_we;
-wire [31:0] csr_wvalue;
+wire csr_re;
+wire [13:0] csr_num;
 wire [31:0] csr_wmask;
-wire [31:0] csr_crmd_rvalue;
-wire [31:0] csr_prmd_rvalue;
-wire [31:0] csr_estat_rvalue;
-wire [31:0] csr_eentry_rvalue;
+wire [31:0] csr_wvalue;
+wire [31:0] csr_rvalue;
+
+wire wb_ex;
+wire ertn_flush;
+wire [ 5:0] wb_ecode;
+wire [ 8:0] wb_esubcode;
+wire [31:0] ex_entry;
+wire [31:0] ex_epc;
 
 wire        need_ui5;
 wire        need_si12;
@@ -264,18 +246,6 @@ reg        gr_we_MEM;
 reg        gr_we_WB;
 reg        is_csr_EX;
 reg [31:0] csr_rvalue_EX;
-reg        ertn_flush_EX;
-reg        ertn_flush_MEM;
-reg        ertn_flush_WB;
-reg        wb_ex_EX;
-reg        wb_ex_MEM;
-reg        wb_ex_WB;
-reg [ 5:0] wb_ecode_EX;
-reg [ 5:0] wb_ecode_MEM;
-reg [ 5:0] wb_ecode_WB;
-reg [ 8:0] wb_esubcode_EX;
-reg [ 8:0] wb_esubcode_MEM;
-reg [ 8:0] wb_esubcode_WB; 
 
 //添加握手信号
 reg IF_valid;
@@ -389,117 +359,37 @@ end
 /****************************************************************************/
 
 
-
 //控制状态寄存器
 /****************************************************************************/
-assign csr_crmd_rvalue = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,csr_crmd_ie,csr_crmd_plv};
-assign csr_prmd_rvalue = {29'b0,csr_prmd_pie,csr_prmd_pplv};
-assign csr_estat_rvalue = {1'b0,csr_estat_esubcode,csr_estat_ecode,3'b0,csr_estat_is[12:11],1'b0,csr_estat_is[9:0]};
-assign csr_eentry_rvalue = {csr_eentry_va,6'b0};
-assign csr_re = inst_csrrd || inst_csrwr || inst_csrxchg;
-assign csr_we = inst_csrwr || inst_csrxchg;
-assign csr_rvalue =     csr_num == 13'h0 ?  csr_crmd_rvalue: 
-                        csr_num == 13'h1 ?  csr_prmd_rvalue: 
-                        csr_num == 13'h5 ? csr_estat_rvalue : 
-                        csr_num == 13'h6 ? csr_era_pc : 
-                        csr_num == 13'hc ? csr_eentry_rvalue : 
-                        csr_num == 13'h30 ? csr_save0 : 
-                        csr_num == 13'h31 ? csr_save1 : 
-                        csr_num == 13'h32 ? csr_save2 : 
-                        csr_num == 13'h33 ? csr_save3 : 32'h00000000;
+assign csr_re = (inst_csrrd || inst_csrwr || inst_csrxchg) && IF_valid && IF_readygo;
+assign csr_we = (inst_csrwr || inst_csrxchg) && IF_valid && IF_readygo;
 assign csr_wmask = (inst_csrwr)? 32'hffffffff :
                     (inst_csrxchg)? rj_value : 32'h00000000;
-assign csr_wvalue =  csr_wmask & rkd_value;
+assign csr_wvalue = rkd_value;
 
-//csr寄存器读写模式
-always @(posedge clk) begin
-    if (reset) begin
-        csr_crmd_plv <= 2'b00;
-        csr_crmd_ie  <= 1'b0;
-    end
-    else if(wb_ex)begin
-        csr_crmd_plv <= 2'b00;
-        csr_crmd_ie <= 1'b0;
-    end
-    else if(ertn_flush) begin
-        csr_crmd_plv <= csr_prmd_pplv;
-        csr_crmd_ie <= csr_prmd_pie;
-    end
-    else if(csr_we&&csr_num==13'h0)  begin
-        csr_crmd_plv <= csr_wvalue[1:0];
-        csr_crmd_ie <= csr_wvalue[2];
-    end
-end
+assign wb_ex = inst_syscall && IF_valid && IF_readygo;
+assign ertn_flush = inst_ertn && IF_valid && IF_readygo;
+assign wb_ecode = 6'hb;
+assign wb_esubcode = 9'h0;
 
-always @(posedge clk) begin
-    if (reset) begin
-        csr_crmd_da <= 1'b1;
-        csr_crmd_pg <= 1'b0;
-        csr_crmd_datf <= 2'b00;
-        csr_crmd_datm <= 2'b00;
-    end
-end
-
-always @(posedge clk) begin
-    if(wb_ex)begin
-        csr_prmd_pplv <= csr_crmd_plv;
-        csr_prmd_pie <= csr_crmd_ie;
-    end
-    else if(csr_we&&csr_num==13'h1) begin
-        csr_prmd_pplv <= csr_wvalue[1:0];
-        csr_prmd_pie <= csr_wvalue[2];
-    end
-end
-
-always @(posedge clk) begin
-    if(wb_ex)begin
-        csr_estat_is[1:0] <= 2'b00;
-    end
-    else if(csr_we&&csr_num==13'h5) begin
-        csr_estat_is[1:0] <= csr_wvalue[1:0];
-    end
-    csr_estat_is[9:2]=8'b0;
-    csr_estat_is[10]=1'b0;
-    csr_estat_is[12:11]=2'b00;
-end
-always @(posedge clk) begin
-    if(wb_ex)begin
-        csr_estat_ecode <= wb_ecode_WB;
-        csr_estat_esubcode <= wb_esubcode_WB;
-    end
-end
-
-always @(posedge clk) begin
-    if(wb_ex)begin
-        csr_era_pc <= pc_WB;
-    end
-    else if(csr_we&&csr_num==13'h6) begin
-        csr_era_pc <= csr_wvalue;
-    end
-end
-
-always @(posedge clk) begin
-    if(csr_we&&csr_num==13'hc) begin
-        csr_eentry_va <= csr_wvalue[31:6];
-    end
-end
-
-always @(posedge clk) begin
-    if(csr_we&&csr_num==13'h30) begin
-        csr_save0 <= csr_wvalue;
-    end
-    else if(csr_we&&csr_num==13'h31) begin
-        csr_save1<=csr_wvalue;
-    end
-    else if(csr_we&&csr_num==13'h32) begin
-        csr_save2<=csr_wvalue;
-    end
-    else if(csr_we&&csr_num==13'h33) begin
-        csr_save3<=csr_wvalue;
-    end
-end
+csr u_csr(
+    .clk(clk),
+    .reset(reset),
+    .csr_we(csr_we),
+    .csr_re(csr_re),
+    .csr_num(csr_num),
+    .csr_wmask(csr_wmask),
+    .csr_wvalue(csr_wvalue),
+    .csr_rvalue(csr_rvalue),
+    .wb_ex(wb_ex),
+    .ertn_flush(ertn_flush),
+    .wb_ecode(wb_ecode),
+    .wb_esubcode(wb_esubcode),
+    .wb_pc(pc_ID),
+    .ex_entry(ex_entry),
+    .ex_epc(ex_epc)
+);
 /****************************************************************************/
-
 
 
 //IF流水级
@@ -735,7 +625,6 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
 
 
 /******** 分支判断块 ********/
-
 assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
 assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
 
@@ -755,8 +644,8 @@ assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_syscall
                   ) && IF_valid;
 assign br_target =  (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_ID + br_offs) :
-                    (inst_ertn)?csr_era_pc:
-                    (inst_syscall)?csr_eentry_rvalue:
+                    (inst_ertn)?ex_epc:
+                    (inst_syscall)?ex_entry:
                     (rj_value + jirl_offs); /*inst_jirl*/
 /******** 分支判断块 ********/
 
@@ -797,18 +686,10 @@ end
 //将一些后续控制信号从ID阶段传递下去
 always @(posedge clk) begin //寄存器控制
     if(reset) begin
-        wb_ex_EX <= 1'b0;
-        ertn_flush_EX <= 1'b0;
-        wb_ecode_EX <= 6'h0;
-        wb_esubcode_EX <= 9'h0;
         is_csr_EX <= 1'b0;
         csr_rvalue_EX <= 32'h0;
     end
     else if(ID_allowin && IF_valid && IF_readygo) begin
-        wb_ex_EX <= inst_syscall;
-        ertn_flush_EX <= inst_ertn;
-        wb_ecode_EX <= 6'hb;
-        wb_esubcode_EX <= 9'h0;
         is_csr_EX <= csr_re;
         csr_rvalue_EX <= csr_rvalue;
     end
@@ -869,7 +750,7 @@ always @(posedge clk) begin
         udiv_sor_valid <= div_unsigned;
         udiv_dend_valid <= div_unsigned;
     end
-    else begin
+    else begin //除法器的bug修复(与prj4无关)
         if (sdiv_sor_ready || sdiv_dend_ready) begin
             sdiv_sor_valid <= !sdiv_sor_ready && sdiv_sor_valid;
             sdiv_dend_valid <= !sdiv_dend_ready && sdiv_dend_valid;
@@ -962,20 +843,6 @@ always @(posedge clk) begin//寄存器控制
         gr_we_MEM <= gr_we_EX;
     end
 end
-always @(posedge clk) begin//寄存器控制
-    if(reset) begin
-        wb_ex_MEM <= 1'b0;
-        ertn_flush_MEM <= 1'b0;
-        wb_ecode_MEM <= 6'h0;
-        wb_esubcode_MEM <= 9'h0;
-    end
-    else if(EX_allowin && ID_valid && ID_readygo) begin
-        wb_ex_MEM <= wb_ex_EX;
-        ertn_flush_MEM <= ertn_flush_EX;
-        wb_ecode_MEM <= wb_ecode_EX;
-        wb_esubcode_MEM <= wb_esubcode_EX;
-    end
-end
 /****************************************************************************/
 
 
@@ -1016,20 +883,6 @@ always @(posedge clk) begin
         data_sram_addroffset_WB <= data_sram_addroffset;
     end
 end
-always @(posedge clk) begin
-    if(reset) begin
-        wb_ex_WB <= 1'b0;
-        ertn_flush_WB <= 1'b0;
-        wb_ecode_WB <= 6'h0;
-        wb_esubcode_WB <= 9'h0;
-    end
-    else if(MEM_allowin && EX_valid && EX_readygo) begin
-        wb_ex_WB <= wb_ex_MEM;
-        ertn_flush_WB <= ertn_flush_MEM;
-        wb_ecode_WB <= wb_ecode_MEM;
-        wb_esubcode_WB <= wb_esubcode_MEM;
-    end
-end
 
 assign data_sram_rdata_off = data_sram_rdata >> (data_sram_addroffset_WB * 8);
 assign mem_result   = data_sram_ld_tag_WB[2]? {{24{data_sram_rdata_off[7] & ~data_sram_ld_tag_WB[0]}}, data_sram_rdata_off[7:0]} :
@@ -1053,9 +906,6 @@ assign final_result = res_from_mem_WB ? mem_result : alu_result_WB; // 最终写
 assign rf_we    = gr_we_WB && MEM_valid && MEM_readygo;
 assign rf_waddr = dest_WB;
 assign rf_wdata = final_result;
-
-assign wb_ex = wb_ex_WB && MEM_valid && MEM_readygo;
-assign ertn_flush = ertn_flush_WB && MEM_valid && MEM_readygo;
 /****************************************************************************/
 
 
