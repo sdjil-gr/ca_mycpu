@@ -27,13 +27,16 @@ FINISH exp11 AT 2024/10/4
 
 FINISH exp12 AT 2024/10/12
 
+#### exp13
+- [x]  为 CPU 增加取指地址错`ADEF`、地址非对齐`ALE`、断点`BRK`和指令不存在`INE`异常的支持;
+- [x]  为 CPU 增加中断的支持，包括2个软件中断、8个硬件中断和定时器中断;
+- [x]  为 CPU 增加控制状态寄存器`ECFG`、`BADV`、`TID`、`TCFG`、`TVAL`、`TICLR`;
+- [x]  为 CPU 增加`rdcntvl.w`、`rdcntvh.w` 和 `rdcntid` 指令;
+
+FINISH exp13 AT 2024/10/13
+
 ## 任务
 
-#### exp13
-- [ ]  为 CPU 增加取指地址错`ADEF`、地址非对齐`ALE`、断点`BRK`和指令不存在`INE`异常的支持;
-- [ ]  为 CPU 增加中断的支持，包括2个软件中断、8个硬件中断和定时器中断;
-- [ ]  为 CPU 增加控制状态寄存器`ECFG`、`BADV`、`TID`、`TCFG`、`TVAL`、`TICLR`;
-- [ ]  为 CPU 增加`rdcntvl.w`、`rdcntvh.w` 和 `rdcntid` 指令;
 
 
 ## 其他
