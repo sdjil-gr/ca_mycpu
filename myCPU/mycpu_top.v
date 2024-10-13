@@ -50,6 +50,7 @@ wire        src1_is_pc;
 wire        src2_is_imm;
 wire        res_from_mem;
 wire        dst_is_r1;
+wire        dst_is_rj;
 wire        gr_we;
 wire        src_reg_is_rd;
 wire [4: 0] dest;
@@ -163,6 +164,10 @@ wire        inst_csrxchg;
 wire        inst_ertn;
 wire        inst_syscall;
 wire        inst_break;
+//rdcnt指令
+wire        inst_rdcntvl_w;
+wire        inst_rdcntvh_w;
+wire        inst_rdcntid_w;
 
 //异常触发信号
 wire        exc_at_ID;       //在ID阶段发生异常 
@@ -189,6 +194,7 @@ wire [ 8:0] wb_esubcode;
 wire [31:0] ex_entry;
 wire [31:0] ex_epc;
 wire        has_int;
+wire [31:0] counter_id;
 
 wire        need_ui5;
 wire        need_si12;
@@ -259,6 +265,9 @@ reg        gr_we_MEM;
 reg        gr_we_WB;
 reg        is_csr_EX;
 reg [31:0] csr_rvalue_EX;
+reg        is_rdcntid_EX;
+reg        is_rdcntvl_EX;
+reg        is_rdcntvh_EX;
 
 //添加握手信号
 reg ID_valid;
@@ -284,10 +293,10 @@ assign EX_readygo = !need_div_r;//阻塞除法
 assign MEM_readygo = 1'b1;
 assign WB_readygo = 1'b1;
 
-assign ID_allowin = (!ID_valid  || EX_allowin  && ID_readygo )&&valid;
-assign EX_allowin = (!EX_valid  || MEM_allowin  && EX_readygo )&&valid;
-assign MEM_allowin = (!MEM_valid  || WB_allowin && MEM_readygo )&&valid;
-assign WB_allowin =(!WB_valid || WB_allowin  && WB_readygo)&&valid;
+assign ID_allowin  = (!ID_valid  || EX_allowin  && ID_readygo )&&valid;
+assign EX_allowin  = (!EX_valid  || MEM_allowin && EX_readygo )&&valid;
+assign MEM_allowin = (!MEM_valid || WB_allowin  && MEM_readygo)&&valid;
+assign WB_allowin  = (!WB_valid  ||                WB_readygo )&&valid;
 
 //流水级控制
 always @(posedge clk) begin
@@ -322,6 +331,23 @@ always @(posedge clk) begin
 end
 /****************************************************************************/
 
+
+//计时器
+/****************************************************************************/
+reg  [63:0] stable_counter;
+wire [31:0] counter_vl;
+wire [31:0] counter_vh;
+
+always @(posedge clk) begin
+    if (reset)
+        stable_counter <= 64'h0;
+    else 
+        stable_counter <= stable_counter + 64'h1;
+end
+
+assign counter_vl = stable_counter[31:0];
+assign counter_vh = stable_counter[63:32];
+/****************************************************************************/
 
 //PC值处理
 /****************************************************************************/
@@ -384,7 +410,8 @@ assign exc_ine = ~(inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | i
                  | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_st_b | inst_st_h 
                  | inst_blt | inst_bge | inst_bltu | inst_bgeu 
                  | inst_csrrd | inst_csrwr | inst_csrxchg 
-                 | inst_ertn | inst_syscall | inst_break) && ID_valid;
+                 | inst_ertn | inst_syscall | inst_break
+                 | inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid_w) && ID_valid;
 assign exc_break = inst_break && ID_valid;
 assign exc_syscall = inst_syscall && ID_valid;
 
@@ -422,7 +449,8 @@ csr u_csr(
     .wb_vaddr(data_sram_addr_EX),
     .ex_entry(ex_entry),
     .ex_epc(ex_epc),
-    .has_int(has_int)
+    .has_int(has_int),
+    .counter_id(counter_id)
 );
 /****************************************************************************/
 
@@ -533,9 +561,13 @@ assign inst_csrrd   = op_31_26_d[6'h01] & op_25_24_d[2'h0] & op_9_5_d[5'h0];
 assign inst_csrwr   = op_31_26_d[6'h01] & op_25_24_d[2'h0] & op_9_5_d[5'h1];
 assign inst_csrxchg = op_31_26_d[6'h01] & op_25_24_d[2'h0] & ~op_9_5_d[5'h0] & ~op_9_5_d[5'h1];
 //新添加异常指令有效信号
-assign inst_ertn    = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0e];
+assign inst_ertn    = op_31_26_d[6'h1] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0e];
 assign inst_syscall = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h16];
 assign inst_break   = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & op_19_15_d[5'h14];
+//新添加rdcnt指令有效信号
+assign inst_rdcntvl_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_9_5_d[5'h0];
+assign inst_rdcntvh_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h19] & op_9_5_d[5'h0];
+assign inst_rdcntid_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_4_0_d[5'h0];
 
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
                     | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
@@ -636,8 +668,11 @@ assign src2_is_imm   = inst_slli_w |
 
 assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
 assign dst_is_r1     = inst_bl;
+assign dst_is_rj     = inst_rdcntid_w;
 assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_ertn & ~inst_syscall;
-assign dest          = dst_is_r1 ? 5'd1 : rd;
+assign dest          = dst_is_r1 ? 5'd1 :
+                       dst_is_rj ? rj :
+                       rd;
 
 
 /******** 寄存器读取块 ********/
@@ -727,10 +762,16 @@ always @(posedge clk) begin //寄存器控制
     if(reset) begin
         is_csr_EX <= 1'b0;
         csr_rvalue_EX <= 32'h0;
+        is_rdcntid_EX <= 1'b0;
+        is_rdcntvl_EX <= 1'b0;
+        is_rdcntvh_EX <= 1'b0;
     end
     else if(EX_allowin && ID_valid && ID_readygo) begin
         is_csr_EX <= csr_re;
         csr_rvalue_EX <= csr_rvalue;
+        is_rdcntid_EX <= inst_rdcntid_w;
+        is_rdcntvl_EX <= inst_rdcntvl_w;
+        is_rdcntvh_EX <= inst_rdcntvh_w;
     end
 end
 always @(posedge clk) begin //寄存器控制
@@ -850,6 +891,9 @@ div_gen_unsigned u_div_gen_unsigned(// 进行无符号除法运算
 assign EX_final_result =  div_signed_r ? (get_div_or_mod_r ? sdiv_result[63:32] : sdiv_result[31:0]):
                           div_unsigned_r ? (get_div_or_mod_r ? udiv_result[63:32] : udiv_result[31:0]):
                           (is_csr_EX)?csr_rvalue_EX://csr指令直接从csr中取值
+                          (is_rdcntid_EX)?counter_id:
+                          (is_rdcntvl_EX)?counter_vl:
+                          (is_rdcntvh_EX)?counter_vh:
                           alu_result;
 assign data_sram_addr_EX  = EX_final_result;//设计访存地址
 

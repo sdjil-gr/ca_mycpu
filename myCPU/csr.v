@@ -18,7 +18,8 @@ module csr(
     input  wire [31:0] wb_vaddr,
     output wire [31:0] ex_entry,
     output wire [31:0] ex_epc,
-    output wire        has_int
+    output wire        has_int,
+    output wire [31:0] counter_id
 );
 
 //CSR寄存器
@@ -107,7 +108,7 @@ assign csr_rvalue =     csr_num == `CSR_CRMD   ? csr_crmd_rvalue :
 assign ex_entry = csr_eentry_rvalue;
 assign ex_epc = csr_era_rvalue;
 assign has_int = (csr_estat_is[12:0] & csr_ecfg_lie[12:0])!= 13'b0 && csr_crmd_ie;
-
+assign counter_id = csr_tid_tid;
 
 //CRMD 的 PLV 域以及 IE 域
 always @(posedge clk) begin
