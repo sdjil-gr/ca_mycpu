@@ -7,25 +7,25 @@ All rights reserved.
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
 
-1. Redistributions of source code must retain the above copyright notice, this
+1. Redistributions of source code must retain the above copyright notice, this 
 list of conditions and the following disclaimer.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
+2. Redistributions in binary form must reproduce the above copyright notice, 
 this list of conditions and the following disclaimer in the documentation and/or
 other materials provided with the distribution.
 
-3. Neither the name of Loongson Technology Corporation Limited nor the names of
-its contributors may be used to endorse or promote products derived from this
+3. Neither the name of Loongson Technology Corporation Limited nor the names of 
+its contributors may be used to endorse or promote products derived from this 
 software without specific prior written permission.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED 
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE 
 DISCLAIMED. IN NO EVENT SHALL LOONGSON TECHNOLOGY CORPORATION LIMITED BE LIABLE
-TO ANY PARTY FOR DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+TO ANY PARTY FOR DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE 
+GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) 
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT 
 LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 --------------------------------------------------------------------------------
@@ -33,10 +33,10 @@ THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //*************************************************************************
 //   > File Name   : confreg.v
-//   > Description : Control module of
+//   > Description : Control module of 
 //                   16 red leds, 2 green/red leds,
-//                   7-segment display,
-//                   switchs,
+//                   7-segment display, 
+//                   switchs, 
 //                   key board,
 //                   bottom STEP,
 //                   timer.
@@ -73,27 +73,34 @@ THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 module confreg
 #(parameter SIMULATION=1'b0)
-(
-    input  wire        clk,
-    input  wire        timer_clk,
-    input  wire        resetn,
+(                     
+    input  wire       clk,          
+    input  wire       timer_clk,
+    input  wire       resetn,     
     // read and write from cpu
-    input  wire        conf_en,
-    input  wire [3 :0] conf_we,
-    input  wire [31:0] conf_addr,
-    input  wire [31:0] conf_wdata,
-    output wire [31:0] conf_rdata,
+    input  wire        conf_req ,
+    input  wire        conf_wr  ,
+    input  wire [1 :0] conf_size,
+    input  wire [3 :0] conf_wstrb,      
+    input  wire [31:0] conf_addr,    
+    input  wire [31:0] conf_wdata,   
+    output wire        conf_addr_ok,
+    output wire        conf_data_ok,
+    output wire [31:0] conf_rdata,   
+    //for CPU_CDE_SRAM
+    output wire [4 :0] ram_random_mask  ,
+
     // read and write to device on board
-    output wire [15:0] led,
-    output wire [1 :0] led_rg0,
-    output wire [1 :0] led_rg1,
-    output reg  [7 :0] num_csn,
-    output reg  [6 :0] num_a_g,
+    output wire [15:0] led,          
+    output wire [1 :0] led_rg0,      
+    output wire [1 :0] led_rg1,      
+    output reg  [7 :0] num_csn,      
+    output reg  [6 :0] num_a_g,      
     output reg  [31:0] num_data,
-    input  wire [7 :0] switch,
-    output wire [3 :0] btn_key_col,
-    input  wire [3 :0] btn_key_row,
-    input  wire [1 :0] btn_step
+    input  wire [7 :0] switch,       
+    output wire [3 :0] btn_key_col,  
+    input  wire [3 :0] btn_key_row,  
+    input  wire [1 :0] btn_step      
 );
     reg  [31:0] cr0;
     reg  [31:0] cr1;
@@ -111,26 +118,27 @@ module confreg
     wire [31:0] sw_inter_data; //switch interleave
     wire [31:0] btn_key_data;
     wire [31:0] btn_step_data;
-    reg  [7 :0] confreg_uart_data;
-    reg         confreg_uart_valid;
     reg  [31:0] timer_r2;
     reg  [31:0] simu_flag;
     reg  [31:0] io_simu;
     reg  [7 :0] virtual_uart_data;
     reg         open_trace;
     reg         num_monitor;
-
-
+                        
     // read data has one cycle delay
     reg [31:0] conf_rdata_reg;
+    reg        conf_req_reg;
+    assign conf_addr_ok = 1'b1;
+    assign conf_data_ok = conf_req_reg;
     assign conf_rdata = conf_rdata_reg;
     always @(posedge clk)
     begin
+        conf_req_reg   <= conf_req && conf_addr_ok;
         if(~resetn)
         begin
             conf_rdata_reg <= 32'd0;
         end
-        else if (conf_en)
+        else if (conf_req && conf_addr_ok)
         begin
             case (conf_addr[15:0])
                 `CR0_ADDR      : conf_rdata_reg <= cr0          ;
@@ -160,18 +168,18 @@ module confreg
         end
     end
 
-//conf write, only support a word write
-wire conf_write = conf_en & (|conf_we);
+    //conf write, only support a word write
+    assign conf_we = conf_req & conf_wr & conf_addr_ok;
 
 //-------------------------{confreg register}begin-----------------------//
-wire write_cr0 = conf_write & (conf_addr[15:0]==`CR0_ADDR);
-wire write_cr1 = conf_write & (conf_addr[15:0]==`CR1_ADDR);
-wire write_cr2 = conf_write & (conf_addr[15:0]==`CR2_ADDR);
-wire write_cr3 = conf_write & (conf_addr[15:0]==`CR3_ADDR);
-wire write_cr4 = conf_write & (conf_addr[15:0]==`CR4_ADDR);
-wire write_cr5 = conf_write & (conf_addr[15:0]==`CR5_ADDR);
-wire write_cr6 = conf_write & (conf_addr[15:0]==`CR6_ADDR);
-wire write_cr7 = conf_write & (conf_addr[15:0]==`CR7_ADDR);
+wire write_cr0 = conf_we & (conf_addr[15:0]==`CR0_ADDR);
+wire write_cr1 = conf_we & (conf_addr[15:0]==`CR1_ADDR);
+wire write_cr2 = conf_we & (conf_addr[15:0]==`CR2_ADDR);
+wire write_cr3 = conf_we & (conf_addr[15:0]==`CR3_ADDR);
+wire write_cr4 = conf_we & (conf_addr[15:0]==`CR4_ADDR);
+wire write_cr5 = conf_we & (conf_addr[15:0]==`CR5_ADDR);
+wire write_cr6 = conf_we & (conf_addr[15:0]==`CR6_ADDR);
+wire write_cr7 = conf_we & (conf_addr[15:0]==`CR7_ADDR);
 always @(posedge clk)
 begin
     cr0 <= !resetn    ? 32'd0      :
@@ -201,22 +209,22 @@ reg  [31:0] conf_wdata_r, conf_wdata_r1,conf_wdata_r2;
 reg  [31:0] timer_r1;
 reg  [31:0] timer;
 
-wire write_timer = conf_write & (conf_addr[15:0]==`TIMER_ADDR);
+wire write_timer = conf_we & (conf_addr[15:0]==`TIMER_ADDR);
 always @(posedge clk)
 begin
     if (!resetn)
     begin
         write_timer_begin <= 1'b0;
-    end
+    end 
     else if (write_timer)
     begin
         write_timer_begin <= 1'b1;
         conf_wdata_r      <= conf_wdata;
-    end
+    end 
     else if (write_timer_end_r2)
     begin
         write_timer_begin <= 1'b0;
-    end
+    end 
 
     write_timer_end_r1 <= write_timer_begin_r2;
     write_timer_end_r2 <= write_timer_end_r1;
@@ -262,7 +270,7 @@ end
 //---------------------------{simulation flag}end------------------------//
 
 //---------------------------{io simulation}begin------------------------//
-wire write_io_simu = conf_write & (conf_addr[15:0]==`IO_SIMU_ADDR);
+wire write_io_simu = conf_we & (conf_addr[15:0]==`IO_SIMU_ADDR);
 always @(posedge clk)
 begin
     if(!resetn)
@@ -277,7 +285,7 @@ end
 //----------------------------{io simulation}end-------------------------//
 
 //-----------------------------{open trace}begin-------------------------//
-wire write_open_trace = conf_write & (conf_addr[15:0]==`OPEN_TRACE_ADDR);
+wire write_open_trace = conf_we & (conf_addr[15:0]==`OPEN_TRACE_ADDR);
 always @(posedge clk)
 begin
     if(!resetn)
@@ -292,7 +300,7 @@ end
 //-----------------------------{open trace}end---------------------------//
 
 //----------------------------{num monitor}begin-------------------------//
-wire write_num_monitor = conf_write & (conf_addr[15:0]==`NUM_MONITOR_ADDR);
+wire write_num_monitor = conf_we & (conf_addr[15:0]==`NUM_MONITOR_ADDR);
 always @(posedge clk)
 begin
     if(!resetn)
@@ -308,35 +316,69 @@ end
 
 //---------------------------{virtual uart}begin-------------------------//
 wire [7:0] write_uart_data;
-wire write_uart_valid  = conf_write & (conf_addr[15:0]==`VIRTUAL_UART_ADDR);
+wire write_uart_valid  = conf_we & (conf_addr[15:0]==`VIRTUAL_UART_ADDR);
 assign write_uart_data = conf_wdata[7:0];
 always @(posedge clk)
 begin
     if(!resetn)
     begin
         virtual_uart_data <= 8'd0;
-        confreg_uart_data <= 8'd0;
-        confreg_uart_valid <= 1'd0;
     end
     else if(write_uart_valid)
     begin
         virtual_uart_data <= write_uart_data;
-        confreg_uart_data <= write_uart_data;
-        confreg_uart_valid <= write_uart_valid;
     end
 end
 //----------------------------{virtual uart}end--------------------------//
 
+//--------------------------{axirandom mask}begin------------------------//
+wire [15:0] switch_led;
+wire [15:0] led_r_n;
+assign led_r_n = ~switch_led;
+
+reg [22:0] pseudo_random_23;
+reg        no_mask;     //if led_r_n[7:0] is all 1, no mask 
+reg        short_delay; //memory short delay
+always @ (posedge clk)
+begin
+   if (!resetn)
+       pseudo_random_23 <= simu_flag[0] ? `RANDOM_SEED : {7'b1010101,led_r_n};
+   else
+       pseudo_random_23 <= {pseudo_random_23[21:0],pseudo_random_23[22] ^ pseudo_random_23[17]};
+
+   if(!resetn)
+       no_mask <= pseudo_random_23[15:0]==16'h00FF;
+
+   if(!resetn)
+       short_delay <= pseudo_random_23[7:0]==8'hFF;
+end
+assign ram_random_mask[0] = (pseudo_random_23[10]&pseudo_random_23[20]) & (short_delay|(pseudo_random_23[11]^pseudo_random_23[5]))
+                          | no_mask;
+assign ram_random_mask[1] = (pseudo_random_23[ 9]&pseudo_random_23[17]) & (short_delay|(pseudo_random_23[12]^pseudo_random_23[4]))
+                          | no_mask;
+assign ram_random_mask[2] = (pseudo_random_23[ 8]^pseudo_random_23[22]) & (short_delay|(pseudo_random_23[13]^pseudo_random_23[3]))
+                          | no_mask;
+assign ram_random_mask[3] = (pseudo_random_23[ 7]&pseudo_random_23[19]) & (short_delay|(pseudo_random_23[14]^pseudo_random_23[2]))
+                          | no_mask;
+assign ram_random_mask[4] = (pseudo_random_23[ 6]^pseudo_random_23[16]) & (short_delay|(pseudo_random_23[15]^pseudo_random_23[1]))
+                          | no_mask;
+
+//---------------------------{axirandom mask}end-------------------------//
+
 //--------------------------------{led}begin-----------------------------//
 //led display
 //led_data[31:0]
-wire write_led = conf_write & (conf_addr[15:0]==`LED_ADDR);
+wire write_led = conf_we & (conf_addr[15:0]==`LED_ADDR);
+
 assign led = led_data[15:0];
+
+assign switch_led = {{2{switch[7]}},{2{switch[6]}},{2{switch[5]}},{2{switch[4]}},
+                    {2{switch[3]}},{2{switch[2]}},{2{switch[1]}},{2{switch[0]}}};
 always @(posedge clk)
 begin
     if(!resetn)
     begin
-        led_data <= 32'h0;
+        led_data <= {16'h0,switch_led};
     end
     else if(write_led)
     begin
@@ -378,7 +420,7 @@ begin
     begin
         key_flag <= 1'd0;
     end
-    else if (key_sample && state_count[3])
+    else if (key_sample && state_count[3]) 
     begin
         key_flag <= 1'b0;
     end
@@ -485,7 +527,7 @@ begin
     begin
         step0_flag <= 1'd0;
     end
-    else if (step0_sample)
+    else if (step0_sample) 
     begin
         step0_flag <= 1'b0;
     end
@@ -526,7 +568,7 @@ begin
     begin
         step1_flag <= 1'd0;
     end
-    else if (step1_sample)
+    else if (step1_sample) 
     begin
         step1_flag <= 1'b0;
     end
@@ -558,8 +600,8 @@ end
 //-------------------------------{led rg}begin---------------------------//
 //led_rg0_data[31:0]  led_rg0_data[31:0]
 //bfd0_f010           bfd0_f014
-wire write_led_rg0 = conf_write & (conf_addr[15:0]==`LED_RG0_ADDR);
-wire write_led_rg1 = conf_write & (conf_addr[15:0]==`LED_RG1_ADDR);
+wire write_led_rg0 = conf_we & (conf_addr[15:0]==`LED_RG0_ADDR);
+wire write_led_rg1 = conf_we & (conf_addr[15:0]==`LED_RG1_ADDR);
 assign led_rg0 = led_rg0_data[1:0];
 assign led_rg1 = led_rg1_data[1:0];
 always @(posedge clk)
@@ -587,7 +629,7 @@ end
 //---------------------------{digital number}begin-----------------------//
 //digital number display
 //num_data[31:0]
-wire write_num = conf_write & (conf_addr[15:0]==`NUM_ADDR);
+wire write_num = conf_we & (conf_addr[15:0]==`NUM_ADDR);
 always @(posedge clk)
 begin
     if(!resetn)
@@ -615,11 +657,11 @@ begin
 end
 //scan data
 reg [3:0] scan_data;
-always @ ( posedge clk )
+always @ ( posedge clk )  
 begin
     if ( !resetn )
     begin
-        scan_data <= 32'd0;
+        scan_data <= 32'd0;  
         num_csn   <= 8'b1111_1111;
     end
     else
