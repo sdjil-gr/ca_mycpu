@@ -54,6 +54,7 @@ reg  [31:0] pc;
 
 wire [14:0] alu_op;
 wire        load_op;
+wire        is_b;
 wire        src1_is_pc;
 wire        src2_is_imm;
 wire        res_from_mem;
@@ -378,9 +379,9 @@ end
 //握手信号处理
 /****************************************************************************/
 assign IF_readygo = inst_first_woshou && inst_sram_data_ok;
-assign ID_readygo = ((valid_r ? !hit_wait : 1'b1));//访存前递阻塞
+assign ID_readygo = (valid_r ? !hit_wait : 1'b1);//访存前递阻塞
 assign EX_readygo = !need_div_r;//阻塞除法
-assign MEM_readygo = (data_first_woshou &&data_sram_data_ok && data_sram_req_MEM) ||!data_sram_req_MEM;
+assign MEM_readygo = (data_first_woshou & &data_sram_data_ok && data_sram_req_MEM) || !data_sram_req_MEM;
 assign WB_readygo = 1'b1;
 
 
@@ -520,9 +521,19 @@ assign exc_at_ID = exc_break || exc_syscall || exc_adef || exc_ine;
 assign exc_at_EX = exc_ale;
 
 assign wb_ex = exc_at_ID || exc_at_EX || has_int;
-assign wb_pc = (exc_adef) ? pc :
-                (has_int||exc_at_ID)?((ID_valid)?pc_ID:(pc_ID_is_b)?pc_ID:pc):
-               ((!br_taken_EX && ID_valid)||br_taken_ID_r) ? ( pc_ID) :
+
+reg pc_ID_is_b;
+always @(posedge clk) begin
+    if (reset) begin
+        pc_ID_is_b <= 1'b0;
+    end
+    else if(ID_allowin && IF_readygo) begin
+        pc_ID_is_b <= is_b;
+    end
+end
+assign wb_pc =  (exc_adef) ? pc :
+                (has_int||exc_at_ID) ? ((ID_valid)?pc_ID:(pc_ID_is_b)?pc_ID:pc) :
+                (!br_taken_EX && ID_valid || br_taken_ID_r) ?  pc_ID :
                 pc_EX;
 assign ertn_flush = inst_ertn && ID_valid;
 assign wb_ecode = has_int     ? `ECODE_INT :
@@ -533,15 +544,6 @@ assign wb_ecode = has_int     ? `ECODE_INT :
                   exc_ine     ? `ECODE_INE :
                   6'h0;
 assign wb_esubcode = 9'h0;
-reg pc_ID_is_b;
-always @(posedge clk) begin
-    if (reset) begin
-        pc_ID_is_b <= 1'b0;
-    end
-    else if(ID_allowin && IF_readygo) begin
-        pc_ID_is_b <= is_b;
-    end
-end
 csr u_csr(
     .clk(clk),
     .reset(reset),
@@ -818,7 +820,6 @@ assign rj_lt_rd = $signed(rj_sign) < $signed(rd_sign);
 
 assign rj_eq_rd = (rj_value == rkd_value);
 // - 将跳转分为在ID的跳转以及在EX的跳转，EX的跳转相比ID的跳转额外取消一条错取指令
-wire is_b;
 assign is_b = inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_jirl | inst_b;
 assign br_taken_ID = (   inst_beq  &&  rj_eq_rd
                    || inst_bne  && !rj_eq_rd
@@ -910,7 +911,7 @@ always @(posedge clk) begin //访存控制
         data_sram_wstrb_EX <= 4'b0;
         data_sram_wdata_EX <= 32'h0;
         data_sram_type_tag_EX <= 4'b0;
-        data_sram_sze_EX <= 2'b0;
+        data_sram_size_EX <= 2'b0;
         data_sram_wr_EX <= 1'b0;
     end
     else if(ID_valid && EX_allowin && ID_readygo) begin
