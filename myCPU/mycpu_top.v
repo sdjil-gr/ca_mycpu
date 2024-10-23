@@ -202,6 +202,7 @@ wire [ 8:0] wb_esubcode;
 wire [31:0] ex_entry;
 wire [31:0] ex_epc;
 wire        has_int;
+wire        has_int_from_csr;
 wire [31:0] counter_id;
 
 wire        need_ui5;
@@ -283,6 +284,16 @@ reg        is_rdcntid_EX;
 reg        is_rdcntvl_EX;
 reg        is_rdcntvh_EX;
 
+//用于随机延迟访存的信号
+reg inst_first_woshou;
+reg data_first_woshou;
+reg br_taken_ID_r;
+reg br_taken_EX_r;
+reg [31:0]br_target_r;
+//指令寄存器
+reg [31:0]inst_ID;
+reg is_inst_ID;
+
 //添加握手信号
 wire IF_valid;
 wire IF_allowin;
@@ -305,82 +316,12 @@ wire WB_allowin;
 wire WB_readygo;
 
 
-reg inst_first_woshou;
-always @(posedge clk) begin
-    if (reset) begin
-        inst_first_woshou <= 1'b0;
-    end
-    else if(IF_readygo) begin
-        inst_first_woshou <= 1'b0;
-    end
-    else if(inst_sram_addr_ok&&inst_sram_req) begin
-        inst_first_woshou <= 1'b1;
-    end
-end
-reg data_first_woshou;
-always @(posedge clk) begin
-    if (reset) begin
-        data_first_woshou <= 1'b0;
-    end
-    else if(MEM_readygo) begin
-        data_first_woshou <= 1'b0;
-    end
-    else if(data_sram_addr_ok&&data_sram_req) begin
-        data_first_woshou <= 1'b1;
-    end
-end
-reg br_taken_ID_r;
-reg br_taken_EX_r;
-reg [31:0]nextpc_r;
-always @(posedge clk) begin
-    if (reset) begin
-        br_taken_ID_r <= 1'b0;
-        nextpc_r <= 32'h0;
-        br_taken_EX_r <= 1'b0;
-    end
-    else if(exc_at_EX)begin
-        nextpc_r <= br_target;
-        br_taken_EX_r <= br_taken_EX;
-    end
-    else if(has_int||exc_at_ID)begin
-        br_taken_ID_r <= br_taken_ID;
-        nextpc_r <= br_target;
-    end
-    else if(IF_readygo)begin
-        br_taken_ID_r <= 1'b0;
-        nextpc_r <= 32'h0;
-        br_taken_EX_r <= 1'b0;
-    end
-    else if(ID_readygo && !IF_readygo && ID_valid) begin
-        br_taken_ID_r <= br_taken_ID;
-        nextpc_r <= br_target;
-        br_taken_EX_r <= br_taken_EX;
-    end
-end
-//指令寄存器
-reg [31:0]inst_ID;
-reg is_inst_ID;
-always @(posedge clk) begin
-    if (reset) begin
-        inst_ID <= 32'h0;
-        is_inst_ID <= 1'b0;
-    end
-    else if(ID_readygo && EX_allowin)begin
-        inst_ID <= inst_sram_rdata;
-        is_inst_ID <= 1'b0;
-    end
-    else if(IF_readygo && !ID_allowin)begin
-        inst_ID <= inst_sram_rdata;
-        is_inst_ID <= 1'b1;
-    end
-
-end
 //握手信号处理
 /****************************************************************************/
-assign IF_readygo = inst_first_woshou && inst_sram_data_ok;
-assign ID_readygo = ((valid_r ? !hit_wait : 1'b1));//访存前递阻塞
+assign IF_readygo = inst_first_woshou && inst_sram_data_ok || exc_adef;
+assign ID_readygo = valid_r ? !hit_wait : 1'b1;//访存前递阻塞
 assign EX_readygo = !need_div_r;//阻塞除法
-assign MEM_readygo = (data_first_woshou &&data_sram_data_ok && data_sram_req_MEM) ||!data_sram_req_MEM;
+assign MEM_readygo = (data_first_woshou && &data_sram_data_ok && data_sram_req_MEM) || !data_sram_req_MEM;
 assign WB_readygo = 1'b1;
 
 
@@ -454,12 +395,9 @@ always @(posedge clk) begin
     if (reset) begin
         pc <= 32'h1c000000;     //trick: to make nextpc be 0x1c000000 during reset 
     end
-    else if(has_int||exc_at_ID||exc_at_EX)begin
-        pc <= br_target;
-    end
     else if(ID_allowin && IF_readygo)begin
         if(br_taken_ID_r||br_taken_EX_r)
-        pc <= nextpc_r;
+        pc <= br_target_r;
         else
         pc <= nextpc;
     end
@@ -519,11 +457,13 @@ assign exc_syscall = inst_syscall && ID_valid;
 assign exc_at_ID = exc_break || exc_syscall || exc_adef || exc_ine;
 assign exc_at_EX = exc_ale;
 
+assign has_int = has_int_from_csr && ID_valid;
+
 assign wb_ex = exc_at_ID || exc_at_EX || has_int;
-assign wb_pc = (exc_adef) ? pc :
-                (has_int||exc_at_ID)?((ID_valid)?pc_ID:(pc_ID_is_b)?pc_ID:pc):
-               ((!br_taken_EX && ID_valid)||br_taken_ID_r) ? ( pc_ID) :
-                pc_EX;
+
+assign wb_pc =  (exc_adef) ? pc :
+                (exc_ale)  ? pc_EX :
+                pc_ID;
 assign ertn_flush = inst_ertn && ID_valid;
 assign wb_ecode = has_int     ? `ECODE_INT :
                   exc_adef    ? `ECODE_ADE :
@@ -533,15 +473,6 @@ assign wb_ecode = has_int     ? `ECODE_INT :
                   exc_ine     ? `ECODE_INE :
                   6'h0;
 assign wb_esubcode = 9'h0;
-reg pc_ID_is_b;
-always @(posedge clk) begin
-    if (reset) begin
-        pc_ID_is_b <= 1'b0;
-    end
-    else if(ID_allowin && IF_readygo) begin
-        pc_ID_is_b <= is_b;
-    end
-end
 csr u_csr(
     .clk(clk),
     .reset(reset),
@@ -559,7 +490,7 @@ csr u_csr(
     .wb_vaddr(data_sram_addr_EX),
     .ex_entry(ex_entry),
     .ex_epc(ex_epc),
-    .has_int(has_int),
+    .has_int(has_int_from_csr),
     .counter_id(counter_id)
 );
 /****************************************************************************/
@@ -567,13 +498,40 @@ csr u_csr(
 
 //IF流水级
 /****************************************************************************/
-assign inst_sram_req    = !inst_first_woshou&&ID_allowin && !exc_adef;//取值地址异常时不进行取指
+assign inst_sram_req    = !inst_first_woshou && ID_allowin && !exc_adef;//取值地址异常时不进行取指
 assign inst_sram_wstrb  = 4'b0;
 assign inst_sram_wr     = 1'b0;
 assign inst_sram_size   = 2'b10;
 assign inst_sram_addr   = pc;
 assign inst_sram_wdata  = 32'b0;
 assign inst = (is_inst_ID)?inst_ID:inst_sram_rdata;
+
+always @(posedge clk) begin
+    if (reset) begin
+        inst_ID <= 32'h0;
+        is_inst_ID <= 1'b0;
+    end
+    else if(ID_readygo && EX_allowin)begin
+        inst_ID <= inst_sram_rdata;
+        is_inst_ID <= 1'b0;
+    end
+    else if(IF_readygo && !ID_allowin)begin
+        inst_ID <= inst_sram_rdata;
+        is_inst_ID <= 1'b1;
+    end
+end
+
+always @(posedge clk) begin
+    if (reset) begin
+        inst_first_woshou <= 1'b0;
+    end
+    else if(IF_readygo) begin
+        inst_first_woshou <= 1'b0;
+    end
+    else if(inst_sram_addr_ok && inst_sram_req) begin
+        inst_first_woshou <= 1'b1;
+    end
+end
 /****************************************************************************/
 
 
@@ -818,8 +776,6 @@ assign rj_lt_rd = $signed(rj_sign) < $signed(rd_sign);
 
 assign rj_eq_rd = (rj_value == rkd_value);
 // - 将跳转分为在ID的跳转以及在EX的跳转，EX的跳转相比ID的跳转额外取消一条错取指令
-wire is_b;
-assign is_b = inst_beq | inst_bne | inst_blt | inst_bge | inst_bltu | inst_bgeu | inst_jirl | inst_b;
 assign br_taken_ID = (   inst_beq  &&  rj_eq_rd
                    || inst_bne  && !rj_eq_rd
                    || inst_blt  &&  rj_lt_rd
@@ -837,6 +793,31 @@ assign br_target =  (wb_ex) ? ex_entry :
                     (inst_ertn) ? ex_epc :
                     (inst_jirl) ? (rj_value + jirl_offs) :
                     (pc_ID + br_offs);//branch
+
+always @(posedge clk) begin
+    if (reset) begin
+        br_taken_ID_r <= 1'b0;
+        br_target_r <= 32'h0;
+        br_taken_EX_r <= 1'b0;
+    end
+    else if(exc_at_EX)begin
+        br_target_r <= br_target;
+        br_taken_EX_r <= br_taken_EX;
+    end
+    else if(has_int||exc_at_ID)begin
+        br_taken_ID_r <= br_taken_ID;
+        br_target_r <= br_target;
+    end
+    else if(IF_readygo)begin
+        br_taken_ID_r <= 1'b0;
+        br_taken_EX_r <= 1'b0;
+    end
+    else if(ID_readygo && !IF_readygo && ID_valid) begin
+        br_taken_ID_r <= br_taken_ID;
+        br_target_r <= br_target;
+        br_taken_EX_r <= br_taken_EX;
+    end
+end
 /******** 分支判断块 ********/
 
 
@@ -910,7 +891,7 @@ always @(posedge clk) begin //访存控制
         data_sram_wstrb_EX <= 4'b0;
         data_sram_wdata_EX <= 32'h0;
         data_sram_type_tag_EX <= 4'b0;
-        data_sram_sze_EX <= 2'b0;
+        data_sram_size_EX <= 2'b0;
         data_sram_wr_EX <= 1'b0;
     end
     else if(ID_valid && EX_allowin && ID_readygo) begin
@@ -1067,13 +1048,25 @@ end
 //MEM流水级
 /****************************************************************************/
 //设置访存信号
-assign data_sram_req = !data_first_woshou &&data_sram_req_MEM && MEM_valid ; // - 小补丁，防止后续埋雷
+assign data_sram_req = !data_first_woshou && data_sram_req_MEM && MEM_valid ;
 assign data_sram_wr = data_sram_wr_MEM & MEM_valid ; // - 小补丁，防止后续埋雷
 assign data_sram_size = data_sram_size_MEM ;
 assign data_sram_wstrb = data_sram_wstrb_MEM;
 assign data_sram_addr = data_sram_addr_MEM;
 assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
 assign data_sram_wdata = data_sram_wdata_MEM;
+
+always @(posedge clk) begin
+    if (reset) begin
+        data_first_woshou <= 1'b0;
+    end
+    else if(MEM_readygo) begin
+        data_first_woshou <= 1'b0;
+    end
+    else if(data_sram_addr_ok&&data_sram_req) begin
+        data_first_woshou <= 1'b1;
+    end
+end
 
 //将一些后续控制信号从MEM传递下去
 always @(posedge clk) begin
