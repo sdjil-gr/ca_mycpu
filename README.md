@@ -39,13 +39,15 @@ FINISH exp13 AT 2024/10/13
 #### exp14
 - [x]  将 CPU 对外接口修改为类 SRAM 总线接口;
 
-FINISH exp12 AT 2024/10/18
+FINISH exp14 AT 2024/10/18
 
+#### exp15
+- [x]  将 CPU 顶层接口修改为 AXI 总线接口。
+
+FINISH exp15 AT 2024/10/23
 
 ## 任务
 
-#### exp15
-- [ ]  将 CPU 顶层接口修改为 AXI 总线接口。
 
 #### exp16
 - [ ]   完善 AXI 总线接口设计使其在采用 AXI 总线的 SoC 验证环境里完成 exp16 对应 func 的
