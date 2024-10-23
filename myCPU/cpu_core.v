@@ -286,8 +286,7 @@ reg br_taken_ID_r;
 reg br_taken_EX_r;
 reg [31:0]br_target_r;
 //指令寄存器
-reg [31:0]inst_ID;
-reg is_inst_ID;
+reg [31:0]inst_reg;
 
 //添加握手信号
 wire IF_valid;
@@ -498,20 +497,14 @@ assign inst_sram_wr     = 1'b0;
 assign inst_sram_size   = 2'b10;
 assign inst_sram_addr   = pc;
 assign inst_sram_wdata  = 32'b0;
-assign inst = (is_inst_ID)?inst_ID:inst_sram_rdata;
+assign inst = (inst_addr_rcv && inst_sram_data_ok) ? inst_sram_rdata : inst_reg;
 
 always @(posedge clk) begin
     if (reset) begin
-        inst_ID <= 32'h0;
-        is_inst_ID <= 1'b0;
+        inst_reg <= 32'h0;
     end
-    else if(ID_readygo && EX_allowin)begin
-        inst_ID <= inst_sram_rdata;
-        is_inst_ID <= 1'b0;
-    end
-    else if(IF_readygo && !ID_allowin)begin
-        inst_ID <= inst_sram_rdata;
-        is_inst_ID <= 1'b1;
+    else if(inst_addr_rcv && inst_sram_data_ok)begin
+        inst_reg <= inst_sram_rdata;
     end
 end
 
