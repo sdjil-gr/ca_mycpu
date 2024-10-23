@@ -1,27 +1,25 @@
 `include "csr.vh"
-module mycpu_top(
+module cpu_core(
     input  wire        clk,
     input  wire        resetn,
     // inst sram interface
     output wire        inst_sram_req,
     output wire        inst_sram_wr,
-    output wire [1:0] inst_sram_size,
-    output wire [ 3:0] inst_sram_wstrb,
+    output wire [ 1:0] inst_sram_size,
     output wire [31:0] inst_sram_addr,
     output wire [31:0] inst_sram_wdata,
+    input  wire [31:0] inst_sram_rdata,
     input  wire        inst_sram_addr_ok,
     input  wire        inst_sram_data_ok,
-    input  wire [31:0] inst_sram_rdata,
     // data sram interface
     output wire        data_sram_req,
     output wire        data_sram_wr,
-    output wire [1:0] data_sram_size,
-    output wire [ 3:0] data_sram_wstrb,
+    output wire [ 1:0] data_sram_size,
     output wire [31:0] data_sram_addr,
     output wire [31:0] data_sram_wdata,
+    input  wire [31:0] data_sram_rdata,
     input  wire        data_sram_addr_ok,
     input  wire        data_sram_data_ok,
-    input  wire [31:0] data_sram_rdata,
     // trace debug interface
     output wire [31:0] debug_wb_pc,
     output wire [ 3:0] debug_wb_rf_we,
@@ -217,13 +215,13 @@ wire [ 4:0] rf_raddr1;
 wire [31:0] rf_rdata1;
 wire [ 4:0] rf_raddr2;
 wire [31:0] rf_rdata2;
-wire        rf_we   ;
+wire        rf_we;
 wire [ 4:0] rf_waddr;
 wire [31:0] rf_wdata;
 
-wire [31:0] alu_src1   ;
-wire [31:0] alu_src2   ;
-wire [31:0] alu_result ;
+wire [31:0] alu_src1;
+wire [31:0] alu_src2;
+wire [31:0] alu_result;
 wire        need_div;
 wire        div_unsigned;
 wire        div_signed;
@@ -237,7 +235,6 @@ wire [31:0] mem_result;
 wire        data_sram_req_ID;
 wire        data_sram_wr_ID;
 wire [1:0]  data_sram_size_ID;
-wire [ 3:0] data_sram_wstrb_ID;
 wire [31:0] data_sram_addr_EX;
 wire [ 1:0] data_sram_addroffset;
 wire [31:0] data_sram_wdata_ID;
@@ -259,8 +256,6 @@ reg        data_sram_wr_EX;
 reg        data_sram_wr_MEM;
 reg [1:0]  data_sram_size_EX;
 reg [1:0]  data_sram_size_MEM;
-reg [ 3:0] data_sram_wstrb_EX;
-reg [ 3:0] data_sram_wstrb_MEM;
 reg [31:0] data_sram_addr_MEM;
 reg [31:0] data_sram_wdata_EX;
 reg [31:0] data_sram_wdata_MEM;
@@ -285,8 +280,8 @@ reg        is_rdcntvl_EX;
 reg        is_rdcntvh_EX;
 
 //用于随机延迟访存的信号
-reg inst_first_woshou;
-reg data_first_woshou;
+reg inst_addr_rcv;
+reg data_addr_rcv;
 reg br_taken_ID_r;
 reg br_taken_EX_r;
 reg [31:0]br_target_r;
@@ -318,10 +313,10 @@ wire WB_readygo;
 
 //握手信号处理
 /****************************************************************************/
-assign IF_readygo = inst_first_woshou && inst_sram_data_ok || exc_adef;
+assign IF_readygo = inst_addr_rcv && inst_sram_data_ok || exc_adef;
 assign ID_readygo = valid_r ? !hit_wait : 1'b1;//访存前递阻塞
 assign EX_readygo = !need_div_r;//阻塞除法
-assign MEM_readygo = (data_first_woshou && &data_sram_data_ok && data_sram_req_MEM) || !data_sram_req_MEM;
+assign MEM_readygo = data_addr_rcv && data_sram_data_ok || !data_sram_req_MEM;
 assign WB_readygo = 1'b1;
 
 
@@ -498,8 +493,7 @@ csr u_csr(
 
 //IF流水级
 /****************************************************************************/
-assign inst_sram_req    = !inst_first_woshou && ID_allowin && !exc_adef;//取值地址异常时不进行取指
-assign inst_sram_wstrb  = 4'b0;
+assign inst_sram_req    = !inst_addr_rcv && ID_allowin && !exc_adef;//取值地址异常时不进行取指
 assign inst_sram_wr     = 1'b0;
 assign inst_sram_size   = 2'b10;
 assign inst_sram_addr   = pc;
@@ -523,13 +517,13 @@ end
 
 always @(posedge clk) begin
     if (reset) begin
-        inst_first_woshou <= 1'b0;
+        inst_addr_rcv <= 1'b0;
     end
     else if(IF_readygo) begin
-        inst_first_woshou <= 1'b0;
+        inst_addr_rcv <= 1'b0;
     end
     else if(inst_sram_addr_ok && inst_sram_req) begin
-        inst_first_woshou <= 1'b1;
+        inst_addr_rcv <= 1'b1;
     end
 end
 /****************************************************************************/
@@ -831,7 +825,6 @@ assign get_div_or_mod = inst_div_w | inst_div_wu;
 assign data_sram_req_ID    = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w;
 assign data_sram_wr_ID   = inst_st_b | inst_st_h | inst_st_w;
 assign data_sram_size_ID = (inst_ld_b | inst_ld_bu | inst_st_b )?2'b00:(inst_ld_h | inst_ld_hu | inst_st_h)?2'b01:2'b10;
-assign data_sram_wstrb_ID    = {4{inst_st_w}} | {2'b00, {2{inst_st_h}}} | {3'b000, inst_st_b};
 assign data_sram_wdata_ID = inst_st_b ? {4{rkd_value[ 7:0]}} :
                             inst_st_h ? {2{rkd_value[15:0]}} :
                             rkd_value;
@@ -888,7 +881,6 @@ end
 always @(posedge clk) begin //访存控制
     if(reset) begin
         data_sram_req_EX <= 1'b0;
-        data_sram_wstrb_EX <= 4'b0;
         data_sram_wdata_EX <= 32'h0;
         data_sram_type_tag_EX <= 4'b0;
         data_sram_size_EX <= 2'b0;
@@ -896,7 +888,6 @@ always @(posedge clk) begin //访存控制
     end
     else if(ID_valid && EX_allowin && ID_readygo) begin
         data_sram_req_EX <= data_sram_req_ID;
-        data_sram_wstrb_EX <= data_sram_wstrb_ID;
         data_sram_wdata_EX <= data_sram_wdata_ID;
         data_sram_type_tag_EX <= data_sram_type_tag;
         data_sram_size_EX <= data_sram_size_ID;
@@ -910,7 +901,7 @@ end
 
 // alu_src1_r, alu_src2_r, alu_op_r      alu相关信号
 // res_from_mem_EX, dest_EX, gr_we_EX      寄存器相关信号
-// data_sram_req_EX, data_sram_wstrb_EX, data_sram_wdata_EX      访存相关信号
+// data_sram_req_EX, data_sram_wdata_EX      访存相关信号
 // sdiv_sor_valid, sdiv_dend_valid, need_div_r      除法器相关信号
 // PC_EX
 
@@ -1004,7 +995,6 @@ assign data_sram_addr_EX  = EX_final_result;//设计访存地址
 always @(posedge clk) begin//访存控制
     if(reset) begin
         data_sram_req_MEM <= 1'b0;
-        data_sram_wstrb_MEM <= 4'b0;
         data_sram_addr_MEM <= 32'h0;
         data_sram_wdata_MEM <= 32'h0;
         data_sram_type_tag_MEM <= 4'b0;
@@ -1013,7 +1003,6 @@ always @(posedge clk) begin//访存控制
     end
     else if(MEM_allowin && EX_valid && EX_readygo) begin
         data_sram_req_MEM <= data_sram_req_EX;
-        data_sram_wstrb_MEM <= (data_sram_wstrb_EX << alu_result[1:0]);
         data_sram_addr_MEM <= data_sram_addr_EX;
         data_sram_wdata_MEM <= data_sram_wdata_EX;
         data_sram_type_tag_MEM <= data_sram_type_tag_EX;
@@ -1039,7 +1028,7 @@ end
 
 //EX --> MEM
 
-// data_sram_req_MEM, data_sram_wstrb_MEM, data_sram_addr_MEM, data_sram_wdata_MEM, data_sram_type_tag_MEM      访存相关信号
+// data_sram_req_MEM, data_sram_addr_MEM, data_sram_wdata_MEM, data_sram_type_tag_MEM      访存相关信号
 // res_from_mem_MEM, dest_MEM, gr_we_MEM      寄存器相关信号
 // PC_MEM
 
@@ -1048,23 +1037,22 @@ end
 //MEM流水级
 /****************************************************************************/
 //设置访存信号
-assign data_sram_req = !data_first_woshou && data_sram_req_MEM && MEM_valid ;
-assign data_sram_wr = data_sram_wr_MEM & MEM_valid ; // - 小补丁，防止后续埋雷
+assign data_sram_req = !data_addr_rcv && data_sram_req_MEM && MEM_valid ;
+assign data_sram_wr = data_sram_wr_MEM && MEM_valid ; // - 小补丁，防止后续埋雷
 assign data_sram_size = data_sram_size_MEM ;
-assign data_sram_wstrb = data_sram_wstrb_MEM;
 assign data_sram_addr = data_sram_addr_MEM;
 assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
 assign data_sram_wdata = data_sram_wdata_MEM;
 
 always @(posedge clk) begin
     if (reset) begin
-        data_first_woshou <= 1'b0;
+        data_addr_rcv <= 1'b0;
     end
     else if(MEM_readygo) begin
-        data_first_woshou <= 1'b0;
+        data_addr_rcv <= 1'b0;
     end
     else if(data_sram_addr_ok&&data_sram_req) begin
-        data_first_woshou <= 1'b1;
+        data_addr_rcv <= 1'b1;
     end
 end
 
