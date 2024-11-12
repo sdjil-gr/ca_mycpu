@@ -42,18 +42,34 @@ FINISH exp13 AT 2024/10/13
 FINISH exp14 AT 2024/10/18
 
 #### exp15
-- [x]  将 CPU 顶层接口修改为 AXI 总线接口。
+- [x]  将 CPU 顶层接口修改为 AXI 总线接口;
 
 FINISH exp15 AT 2024/10/23
 
 #### exp16
-- [x]   完善 AXI 总线接口设计使其在采用 AXI 总线的 SoC 验证环境里完成 exp16 对应 func 的
-随机延迟功能验证，要求成功通过仿真和上板验证。
+- [x]  完善 AXI 总线接口设计使其在采用 AXI 总线的 SoC 验证环境里完成 exp16 对应 func 的
+随机延迟功能验证，要求成功通过仿真和上板验证;
 
 FINISH exp16 AT 2024/10/23
 
+#### exp17
+- [x]  完成 TLB 设计
+
+FINISH exp17 AT 2024/11/10
+
 ## 任务
 
+### 存储管理单元设计
+
+#### exp18
+- [ ]  在 CPU 中增加 `TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB` 指令;
+- [ ]  在 CPU 中增加 `TLBIDX`、`TLBEHI`、`TLBELO0`、`TLBELO1`、`ASID`、`TLBRENTRY` 等 CSR 寄存器;
+
+#### exp19
+- [ ]  为 CPU 增加 TLB 相关异常：TLB 重填例外、load/store/取指操作页无效例外、页修改例
+外、页特权等级不合规例外;
+- [ ]  在 CPU 中增加 DMW CSR 寄存器;
+- [ ]  为 CPU 增加虚实地址映射的功能;
 
 
 
