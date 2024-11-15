@@ -1,5 +1,9 @@
 `include "csr.vh"
-module cpu_core(
+module cpu_core
+#(
+    parameter TLBNUM = 16
+)
+(
     input  wire        clk,
     input  wire        resetn,
     // inst sram interface
@@ -174,7 +178,16 @@ wire        inst_break;
 wire        inst_rdcntvl_w;
 wire        inst_rdcntvh_w;
 wire        inst_rdcntid_w;
-
+//TLB指令
+wire        inst_TLBSRCH;
+wire        inst_TLBRD;
+wire        inst_TLBWR;
+wire        inst_TLBFILL;
+wire        inst_INVTLB;
+wire        inst_TLBSRCH_valid;
+wire        inst_TLBRD_valid;
+wire        inst_TLBWR_valid;
+wire        inst_TLBFILL_valid;
 //异常触发信号
 wire        exc_at_ID;       //在ID阶段发生异常 
 wire        exc_at_EX;       //在EX阶段发生异常
@@ -202,6 +215,15 @@ wire [31:0] ex_epc;
 wire        has_int;
 wire        has_int_from_csr;
 wire [31:0] counter_id;
+wire [31:0] csr_tlbehi_rvalue;
+wire [31:0] csr_tlbelo0_rvalue;
+wire [31:0] csr_tlbelo1_rvalue;
+wire [31:0] csr_tlbidx_rvalue;
+wire [31:0] csr_asid_rvalue;
+wire [31:0] csr_dmw0_rvalue;
+wire [31:0] csr_dmw1_rvalue;
+wire [31:0] csr_estat_rvalue;
+wire [31:0] csr_tlbrentry_rvalue;
 
 wire        need_ui5;
 wire        need_si12;
@@ -444,7 +466,8 @@ assign exc_ine = ~(inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | i
                  | inst_blt | inst_bge | inst_bltu | inst_bgeu 
                  | inst_csrrd | inst_csrwr | inst_csrxchg 
                  | inst_ertn | inst_syscall | inst_break
-                 | inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid_w) && ID_valid;
+                 | inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid_w 
+                 | inst_TLBFILL | inst_TLBSRCH | inst_TLBRD | inst_TLBWR | inst_INVTLB_op) && ID_valid;
 assign exc_break = inst_break && ID_valid;
 assign exc_syscall = inst_syscall && ID_valid;
 
@@ -467,6 +490,11 @@ assign wb_ecode = has_int     ? `ECODE_INT :
                   exc_ine     ? `ECODE_INE :
                   6'h0;
 assign wb_esubcode = 9'h0;
+
+assign inst_TLBSRCH_valid = inst_TLBSRCH && ID_valid;
+assign inst_TLBRD_valid = inst_TLBRD && ID_valid;
+assign inst_TLBWR_valid = inst_TLBWR && ID_valid;
+assign inst_TLBFILL_valid = inst_TLBFILL && ID_valid;
 csr u_csr(
     .clk(clk),
     .reset(reset),
@@ -485,9 +513,195 @@ csr u_csr(
     .ex_entry(ex_entry),
     .ex_epc(ex_epc),
     .has_int(has_int_from_csr),
-    .counter_id(counter_id)
+    .counter_id(counter_id),
+    .csr_tlbehi_rvalue(csr_tlbehi_rvalue),
+    .csr_tlbelo0_rvalue(csr_tlbelo0_rvalue),
+    .csr_tlbelo1_rvalue(csr_tlbelo1_rvalue),
+    .csr_tlbidx_rvalue(csr_tlbidx_rvalue),
+    .csr_asid_rvalue(csr_asid_rvalue),
+    .csr_dmw0_rvalue(csr_dmw0_rvalue),
+    .csr_dmw1_rvalue(csr_dmw1_rvalue),
+    .csr_estat_rvalue(csr_estat_rvalue),
+    .csr_tlbrentry_rvalue(csr_tlbrentry_rvalue),
+    .inst_TLBSRCH_valid(inst_TLBSRCH_valid),
+    .inst_TLBRD_valid(inst_TLBRD_valid),
+    .inst_TLBWR_valid(inst_TLBWR_valid),
+    .inst_TLBFILL_valid(inst_TLBFILL_valid),
+    .s1_found(s1_found),
+    .s1_index(s1_index),
+    .r_e(r_e),
+    .r_vppn(r_vppn),
+    .r_ps(r_ps),
+    .r_asid(r_asid),
+    .r_g(r_g),
+    .r_ppn0(r_ppn0),
+    .r_plv0(r_plv0),
+    .r_mat0(r_mat0),
+    .r_d0(r_d0),
+    .r_v0(r_v0),
+    .r_ppn1(r_ppn1),
+    .r_plv1(r_plv1),
+    .r_mat1(r_mat1),
+    .r_d1(r_d1),
+    .r_v1(r_v1)
 );
 /****************************************************************************/
+// search port 0 (for fetch)
+    wire [ 18:0]    s0_vppn;
+    wire            s0_va_bit12;
+    wire [  9:0]    s0_asid;
+    wire            s0_found;
+    wire [$clog2(TLBNUM) - 1:0] s0_index;
+    wire [ 19:0]    s0_ppn;
+    wire [  5:0]    s0_ps;
+    wire [  1:0]    s0_plv;
+    wire [  1:0]    s0_mat;
+    wire            s0_d;
+    wire            s0_v;
+
+    // search port 1 (for load/store)
+    wire [ 18:0]    s1_vppn;
+    wire            s1_va_bit12;
+    wire [  9:0]    s1_asid;
+    wire            s1_found;
+    wire [$clog2(TLBNUM) - 1:0] s1_index;
+    wire [ 19:0]    s1_ppn;
+    wire [  5:0]    s1_ps;
+    wire [  1:0]    s1_plv;
+    wire [  1:0]    s1_mat;
+    wire            s1_v;
+
+    // invtlb opcode
+    wire            invtlb_valid;
+    wire [ 4:0]     invtlb_op;
+
+    // write port
+    wire            we; //w(rite) e(nable)
+    wire [$clog2(TLBNUM) - 1:0] w_index;
+    wire            w_e;
+    wire [ 18:0]    w_vppn;
+    wire [  5:0]    w_ps;
+    wire [  9:0]    w_asid;
+    wire            w_g;
+    wire [ 19:0]    w_ppn0;
+    wire [  1:0]    w_plv0;
+    wire [  1:0]    w_mat0;
+    wire            w_d0;
+    wire            w_v0;
+    wire [ 19:0]    w_ppn1;
+    wire [  1:0]    w_plv1;
+    wire [  1:0]    w_mat1;
+    wire            w_d1;
+    wire            w_v1;
+
+    // read port
+    wire [$clog2(TLBNUM) - 1:0] r_index;
+    wire            r_e;
+    wire [ 18:0]    r_vppn;
+    wire [  5:0]    r_ps;
+    wire [  9:0]    r_asid;
+    wire            r_g;
+    wire [ 19:0]    r_ppn0;
+    wire [  1:0]    r_plv0;
+    wire [  1:0]    r_mat0;
+    wire            r_d0;
+    wire            r_v0;
+    wire [ 19:0]    r_ppn1;
+    wire [  1:0]    r_plv1;
+    wire [  1:0]    r_mat1;
+    wire            r_d1;
+    wire            r_v1;
+tlb  u_tlb(
+   .clk(clk),
+   .s0_vppn(s0_vppn),
+   .s0_va_bit12(s0_va_bit12),
+    .s0_asid(s0_asid),
+    .s0_found(s0_found),
+    .s0_index(s0_index),
+    .s0_ppn(s0_ppn),
+    .s0_ps(s0_ps),
+    .s0_plv(s0_plv),
+    .s0_mat(s0_mat),
+    .s0_d(s0_d),
+    .s0_v(s0_v),
+
+    .s1_vppn(s1_vppn),
+   .s1_va_bit12(s1_va_bit12),
+    .s1_asid(s1_asid),
+    .s1_found(s1_found),
+    .s1_index(s1_index),
+    .s1_ppn(s1_ppn),
+    .s1_ps(s1_ps),
+    .s1_plv(s1_plv),
+    .s1_mat(s1_mat),
+    .s1_d(s1_d),
+    .s1_v(s1_v),
+    
+    .invtlb_valid(invtlb_valid),
+    .invtlb_op(invtlb_op),
+
+    .we(we), //w(rite) e(nable)
+    .w_index(w_index),
+    .w_e(w_e),
+    .w_vppn(w_vppn),
+    .w_ps(w_ps),
+    .w_asid(w_asid),
+    .w_g(w_g),
+    .w_ppn0(w_ppn0),
+    .w_plv0(w_plv0),
+    .w_mat0(w_mat0),
+    .w_d0(w_d0),
+    .w_v0(w_v0),
+    .w_ppn1(w_ppn1),
+    .w_plv1(w_plv1),
+    .w_mat1(w_mat1),
+    .w_d1(w_d1),
+    .w_v1(w_v1),
+
+    .r_index(r_index),
+    .r_e(r_e),
+    .r_vppn(r_vppn),
+    .r_ps(r_ps),
+    .r_asid(r_asid),
+    .r_g(r_g),
+    .r_ppn0(r_ppn0),
+    .r_plv0(r_plv0),
+    .r_mat0(r_mat0),
+    .r_d0(r_d0),
+    .r_v0(r_v0),
+    .r_ppn1(r_ppn1),
+    .r_plv1(r_plv1),
+    .r_mat1(r_mat1),
+    .r_d1(r_d1),
+    .r_v1(r_v1)
+);
+assign invtlb_valid = inst_INVTLB && ID_valid;
+assign invtlb_op = op_4_0;
+
+assign s1_vppn = (inst_TLBSRCH)?csr_tlbehi_rvalue[31:13]:(inst_INVTLB)?rf_rdata2[31:13]:data_sram_addr_EX[31:13];
+assign s1_va_bit12 = (inst_TLBSRCH)?1'b0:(inst_INVTLB)?rf_rdata2[12]:data_sram_addr_EX[12];
+assign s1_asid = (inst_TLBSRCH) ? csr_asid_rvalue[9:0] :(inst_INVTLB) ?rf_rdata1[9:0]:10'h0;
+
+assign r_index = csr_tlbidx_rvalue[3:0];
+
+assign we = (inst_TLBWR|inst_TLBFILL) && ID_valid;
+assign w_index =(inst_TLBWR)? csr_tlbidx_rvalue[3:0] : 4'h0;
+assign w_e = (csr_estat_rvalue[21:16]==6'h3f)? 1'b1 : 
+             (csr_tlbidx_rvalue[31]==1'h0)? 1'b1 : 1'b0;
+assign w_vppn = csr_tlbehi_rvalue[31:13];
+assign w_ps = csr_tlbidx_rvalue[5:0];
+assign w_asid = csr_asid_rvalue[9:0];
+assign w_g = csr_tlbelo0_rvalue[6];
+assign w_ppn0 = csr_tlbelo0_rvalue[31:8];
+assign w_plv0 = csr_tlbelo0_rvalue[3:2];
+assign w_mat0 = csr_tlbelo0_rvalue[5:4];
+assign w_d0 = csr_tlbelo0_rvalue[1];
+assign w_v0 = csr_tlbelo0_rvalue[0];
+assign w_ppn1 = csr_tlbelo1_rvalue[31:8];
+assign w_plv1 = csr_tlbelo1_rvalue[3:2];
+assign w_mat1 = csr_tlbelo1_rvalue[5:4];
+assign w_d1 = csr_tlbelo1_rvalue[1];
+assign w_v1 = csr_tlbelo1_rvalue[0];
 
 
 //IF流水级
@@ -627,6 +841,13 @@ assign inst_break   = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & o
 assign inst_rdcntvl_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_9_5_d[5'h0];
 assign inst_rdcntvh_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h19] & op_9_5_d[5'h0];
 assign inst_rdcntid_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_4_0_d[5'h0];
+//新添加TLB指令有效信号
+assign inst_TLBSRCH = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0a] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
+assign inst_TLBRD   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0b] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
+assign inst_TLBWR   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0c] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
+assign inst_TLBFILL = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0d] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
+assign inst_INVTLB  = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h13];
+
 
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
                     | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
@@ -728,7 +949,7 @@ assign src2_is_imm   = inst_slli_w |
 assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
 assign dst_is_r1     = inst_bl;
 assign dst_is_rj     = inst_rdcntid_w;
-assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_ertn & ~inst_syscall;
+assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_ertn & ~inst_syscall & ~inst_INVTLB & ~inst_TLBFILL & ~inst_TLBRD & ~inst_TLBWR & ~inst_TLBSRCH;
 assign dest          = dst_is_r1 ? 5'd1 :
                        dst_is_rj ? rj :
                        rd;
@@ -756,6 +977,8 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
 
 
 /******** 分支判断块 ********/
+wire inst_INVTLB_op;
+assign inst_INVTLB_op = (inst_INVTLB && (op_4_0==5'h0 || op_4_0==5'h1 || op_4_0==5'h2 || op_4_0==5'h3 || op_4_0==5'h4 || op_4_0==5'h5 || op_4_0==5'h6));
 assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
 assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
 
@@ -773,7 +996,7 @@ assign br_taken_ID = (   inst_beq  &&  rj_eq_rd
                    || inst_bl
                    || inst_b
                    || inst_ertn
-                   ) && ID_valid || exc_at_ID || has_int;
+) && ID_valid || exc_at_ID || has_int;
 assign br_taken_EX = exc_at_EX;
 // - 调整了一下br_target的优先级
 assign br_target =  (wb_ex) ? ex_entry :

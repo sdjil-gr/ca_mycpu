@@ -201,6 +201,9 @@ always @ (posedge clk) begin
         tlb_d1   [w_index] <= w_d1;
         tlb_v1   [w_index] <= w_v1;
     end
+    else if(!we && invtlb_valid) begin
+        tlb_e <= ~invtlb_op_num[invtlb_op]; //对于 INVTLB 指令来说，将对应 TLB 表项无效的操作就是将 inv_match[i] 等于 1 对应的 tlb_e[i] 置为 0。
+    end
 end
 
 //读操作
@@ -240,10 +243,9 @@ assign invtlb_op_num[4] = cond1 & cond3;
 assign invtlb_op_num[5] = cond1 & cond3 & cond4;  
 assign invtlb_op_num[6] = (cond2 | cond3) & cond4;  
 
-//对于 INVTLB 指令来说，将对应 TLB 表项无效的操作就是将 inv_match[i] 等于 1 对应的 tlb_e[i] 置为 0。
-always @ (posedge clk) begin
-    if(!we && invtlb_valid)
-        tlb_e <= ~invtlb_op_num[invtlb_op]; 
-end
+
+// always @ (posedge clk) begin
+    
+// end
 
 endmodule
