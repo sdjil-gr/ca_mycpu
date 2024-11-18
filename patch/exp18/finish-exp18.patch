@@ -1,0 +1,1002 @@
+From e32c2a91d47da094c7313efe14e74ced65d2d9ce Mon Sep 17 00:00:00 2001
+From: SparkBubble <26917049@qq.com>
+Date: Mon, 18 Nov 2024 13:56:05 +0800
+Subject: [PATCH] finish exp18
+
+---
+ cpu_core.v | 235 +++++++++++++++++++++++-
+ csr.v      | 525 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ csr.vh     |  48 ++++-
+ tlb.v      |  12 +-
+ 4 files changed, 803 insertions(+), 17 deletions(-)
+
+diff --git a/cpu_core.v b/cpu_core.v
+index 07f5ae7..6b91a21 100644
+--- a/cpu_core.v
++++ b/cpu_core.v
+@@ -1,5 +1,9 @@
+ `include "csr.vh"
+-module cpu_core(
++module cpu_core
++#(
++    parameter TLBNUM = 16
++)
++(
+     input  wire        clk,
+     input  wire        resetn,
+     // inst sram interface
+@@ -174,7 +178,16 @@ wire        inst_break;
+ wire        inst_rdcntvl_w;
+ wire        inst_rdcntvh_w;
+ wire        inst_rdcntid_w;
+-
++//TLB指令
++wire        inst_TLBSRCH;
++wire        inst_TLBRD;
++wire        inst_TLBWR;
++wire        inst_TLBFILL;
++wire        inst_INVTLB;
++wire        inst_TLBSRCH_valid;
++wire        inst_TLBRD_valid;
++wire        inst_TLBWR_valid;
++wire        inst_TLBFILL_valid;
+ //异常触发信号
+ wire        exc_at_ID;       //在ID阶段发生异常 
+ wire        exc_at_EX;       //在EX阶段发生异常
+@@ -202,6 +215,15 @@ wire [31:0] ex_epc;
+ wire        has_int;
+ wire        has_int_from_csr;
+ wire [31:0] counter_id;
++wire [31:0] csr_tlbehi_rvalue;
++wire [31:0] csr_tlbelo0_rvalue;
++wire [31:0] csr_tlbelo1_rvalue;
++wire [31:0] csr_tlbidx_rvalue;
++wire [31:0] csr_asid_rvalue;
++wire [31:0] csr_dmw0_rvalue;
++wire [31:0] csr_dmw1_rvalue;
++wire [31:0] csr_estat_rvalue;
++wire [31:0] csr_tlbrentry_rvalue;
+ 
+ wire        need_ui5;
+ wire        need_si12;
+@@ -444,7 +466,8 @@ assign exc_ine = ~(inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | i
+                  | inst_blt | inst_bge | inst_bltu | inst_bgeu 
+                  | inst_csrrd | inst_csrwr | inst_csrxchg 
+                  | inst_ertn | inst_syscall | inst_break
+-                 | inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid_w) && ID_valid;
++                 | inst_rdcntvl_w | inst_rdcntvh_w | inst_rdcntid_w 
++                 | inst_TLBFILL | inst_TLBSRCH | inst_TLBRD | inst_TLBWR | inst_INVTLB_op) && ID_valid;
+ assign exc_break = inst_break && ID_valid;
+ assign exc_syscall = inst_syscall && ID_valid;
+ 
+@@ -467,6 +490,11 @@ assign wb_ecode = has_int     ? `ECODE_INT :
+                   exc_ine     ? `ECODE_INE :
+                   6'h0;
+ assign wb_esubcode = 9'h0;
++
++assign inst_TLBSRCH_valid = inst_TLBSRCH && ID_valid;
++assign inst_TLBRD_valid = inst_TLBRD && ID_valid;
++assign inst_TLBWR_valid = inst_TLBWR && ID_valid;
++assign inst_TLBFILL_valid = inst_TLBFILL && ID_valid;
+ csr u_csr(
+     .clk(clk),
+     .reset(reset),
+@@ -485,9 +513,195 @@ csr u_csr(
+     .ex_entry(ex_entry),
+     .ex_epc(ex_epc),
+     .has_int(has_int_from_csr),
+-    .counter_id(counter_id)
++    .counter_id(counter_id),
++    .csr_tlbehi_rvalue(csr_tlbehi_rvalue),
++    .csr_tlbelo0_rvalue(csr_tlbelo0_rvalue),
++    .csr_tlbelo1_rvalue(csr_tlbelo1_rvalue),
++    .csr_tlbidx_rvalue(csr_tlbidx_rvalue),
++    .csr_asid_rvalue(csr_asid_rvalue),
++    .csr_dmw0_rvalue(csr_dmw0_rvalue),
++    .csr_dmw1_rvalue(csr_dmw1_rvalue),
++    .csr_estat_rvalue(csr_estat_rvalue),
++    .csr_tlbrentry_rvalue(csr_tlbrentry_rvalue),
++    .inst_TLBSRCH_valid(inst_TLBSRCH_valid),
++    .inst_TLBRD_valid(inst_TLBRD_valid),
++    .inst_TLBWR_valid(inst_TLBWR_valid),
++    .inst_TLBFILL_valid(inst_TLBFILL_valid),
++    .s1_found(s1_found),
++    .s1_index(s1_index),
++    .r_e(r_e),
++    .r_vppn(r_vppn),
++    .r_ps(r_ps),
++    .r_asid(r_asid),
++    .r_g(r_g),
++    .r_ppn0(r_ppn0),
++    .r_plv0(r_plv0),
++    .r_mat0(r_mat0),
++    .r_d0(r_d0),
++    .r_v0(r_v0),
++    .r_ppn1(r_ppn1),
++    .r_plv1(r_plv1),
++    .r_mat1(r_mat1),
++    .r_d1(r_d1),
++    .r_v1(r_v1)
+ );
+ /****************************************************************************/
++// search port 0 (for fetch)
++    wire [ 18:0]    s0_vppn;
++    wire            s0_va_bit12;
++    wire [  9:0]    s0_asid;
++    wire            s0_found;
++    wire [$clog2(TLBNUM) - 1:0] s0_index;
++    wire [ 19:0]    s0_ppn;
++    wire [  5:0]    s0_ps;
++    wire [  1:0]    s0_plv;
++    wire [  1:0]    s0_mat;
++    wire            s0_d;
++    wire            s0_v;
++
++    // search port 1 (for load/store)
++    wire [ 18:0]    s1_vppn;
++    wire            s1_va_bit12;
++    wire [  9:0]    s1_asid;
++    wire            s1_found;
++    wire [$clog2(TLBNUM) - 1:0] s1_index;
++    wire [ 19:0]    s1_ppn;
++    wire [  5:0]    s1_ps;
++    wire [  1:0]    s1_plv;
++    wire [  1:0]    s1_mat;
++    wire            s1_v;
++
++    // invtlb opcode
++    wire            invtlb_valid;
++    wire [ 4:0]     invtlb_op;
++
++    // write port
++    wire            we; //w(rite) e(nable)
++    wire [$clog2(TLBNUM) - 1:0] w_index;
++    wire            w_e;
++    wire [ 18:0]    w_vppn;
++    wire [  5:0]    w_ps;
++    wire [  9:0]    w_asid;
++    wire            w_g;
++    wire [ 19:0]    w_ppn0;
++    wire [  1:0]    w_plv0;
++    wire [  1:0]    w_mat0;
++    wire            w_d0;
++    wire            w_v0;
++    wire [ 19:0]    w_ppn1;
++    wire [  1:0]    w_plv1;
++    wire [  1:0]    w_mat1;
++    wire            w_d1;
++    wire            w_v1;
++
++    // read port
++    wire [$clog2(TLBNUM) - 1:0] r_index;
++    wire            r_e;
++    wire [ 18:0]    r_vppn;
++    wire [  5:0]    r_ps;
++    wire [  9:0]    r_asid;
++    wire            r_g;
++    wire [ 19:0]    r_ppn0;
++    wire [  1:0]    r_plv0;
++    wire [  1:0]    r_mat0;
++    wire            r_d0;
++    wire            r_v0;
++    wire [ 19:0]    r_ppn1;
++    wire [  1:0]    r_plv1;
++    wire [  1:0]    r_mat1;
++    wire            r_d1;
++    wire            r_v1;
++tlb  u_tlb(
++   .clk(clk),
++   .s0_vppn(s0_vppn),
++   .s0_va_bit12(s0_va_bit12),
++    .s0_asid(s0_asid),
++    .s0_found(s0_found),
++    .s0_index(s0_index),
++    .s0_ppn(s0_ppn),
++    .s0_ps(s0_ps),
++    .s0_plv(s0_plv),
++    .s0_mat(s0_mat),
++    .s0_d(s0_d),
++    .s0_v(s0_v),
++
++    .s1_vppn(s1_vppn),
++   .s1_va_bit12(s1_va_bit12),
++    .s1_asid(s1_asid),
++    .s1_found(s1_found),
++    .s1_index(s1_index),
++    .s1_ppn(s1_ppn),
++    .s1_ps(s1_ps),
++    .s1_plv(s1_plv),
++    .s1_mat(s1_mat),
++    .s1_d(s1_d),
++    .s1_v(s1_v),
++    
++    .invtlb_valid(invtlb_valid),
++    .invtlb_op(invtlb_op),
++
++    .we(we), //w(rite) e(nable)
++    .w_index(w_index),
++    .w_e(w_e),
++    .w_vppn(w_vppn),
++    .w_ps(w_ps),
++    .w_asid(w_asid),
++    .w_g(w_g),
++    .w_ppn0(w_ppn0),
++    .w_plv0(w_plv0),
++    .w_mat0(w_mat0),
++    .w_d0(w_d0),
++    .w_v0(w_v0),
++    .w_ppn1(w_ppn1),
++    .w_plv1(w_plv1),
++    .w_mat1(w_mat1),
++    .w_d1(w_d1),
++    .w_v1(w_v1),
++
++    .r_index(r_index),
++    .r_e(r_e),
++    .r_vppn(r_vppn),
++    .r_ps(r_ps),
++    .r_asid(r_asid),
++    .r_g(r_g),
++    .r_ppn0(r_ppn0),
++    .r_plv0(r_plv0),
++    .r_mat0(r_mat0),
++    .r_d0(r_d0),
++    .r_v0(r_v0),
++    .r_ppn1(r_ppn1),
++    .r_plv1(r_plv1),
++    .r_mat1(r_mat1),
++    .r_d1(r_d1),
++    .r_v1(r_v1)
++);
++assign invtlb_valid = inst_INVTLB && ID_valid;
++assign invtlb_op = op_4_0;
++
++assign s1_vppn = (inst_TLBSRCH)?csr_tlbehi_rvalue[31:13]:(inst_INVTLB)?rf_rdata2[31:13]:data_sram_addr_EX[31:13];
++assign s1_va_bit12 = (inst_TLBSRCH)?1'b0:(inst_INVTLB)?rf_rdata2[12]:data_sram_addr_EX[12];
++assign s1_asid = (inst_TLBSRCH) ? csr_asid_rvalue[9:0] :(inst_INVTLB) ?rf_rdata1[9:0]:10'h0;
++
++assign r_index = csr_tlbidx_rvalue[3:0];
++
++assign we = (inst_TLBWR|inst_TLBFILL) && ID_valid;
++assign w_index =(inst_TLBWR)? csr_tlbidx_rvalue[3:0] : 4'h0;
++assign w_e = (csr_estat_rvalue[21:16]==6'h3f)? 1'b1 : 
++             (csr_tlbidx_rvalue[31]==1'h0)? 1'b1 : 1'b0;
++assign w_vppn = csr_tlbehi_rvalue[31:13];
++assign w_ps = csr_tlbidx_rvalue[5:0];
++assign w_asid = csr_asid_rvalue[9:0];
++assign w_g = csr_tlbelo0_rvalue[6];
++assign w_ppn0 = csr_tlbelo0_rvalue[31:8];
++assign w_plv0 = csr_tlbelo0_rvalue[3:2];
++assign w_mat0 = csr_tlbelo0_rvalue[5:4];
++assign w_d0 = csr_tlbelo0_rvalue[1];
++assign w_v0 = csr_tlbelo0_rvalue[0];
++assign w_ppn1 = csr_tlbelo1_rvalue[31:8];
++assign w_plv1 = csr_tlbelo1_rvalue[3:2];
++assign w_mat1 = csr_tlbelo1_rvalue[5:4];
++assign w_d1 = csr_tlbelo1_rvalue[1];
++assign w_v1 = csr_tlbelo1_rvalue[0];
+ 
+ 
+ //IF流水级
+@@ -627,6 +841,13 @@ assign inst_break   = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h2] & o
+ assign inst_rdcntvl_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_9_5_d[5'h0];
+ assign inst_rdcntvh_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h19] & op_9_5_d[5'h0];
+ assign inst_rdcntid_w = op_31_26_d[6'h0] & op_25_22_d[4'h0] & op_21_20_d[2'h0] & op_19_15_d[5'h0] & op_14_10_d[5'h18] & op_4_0_d[5'h0];
++//新添加TLB指令有效信号
++assign inst_TLBSRCH = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0a] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
++assign inst_TLBRD   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0b] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
++assign inst_TLBWR   = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0c] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
++assign inst_TLBFILL = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h10] & op_14_10_d[5'h0d] & op_9_5_d[5'h0] & op_4_0_d[5'h0];
++assign inst_INVTLB  = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h13];
++
+ 
+ assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
+                     | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
+@@ -728,7 +949,7 @@ assign src2_is_imm   = inst_slli_w |
+ assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
+ assign dst_is_r1     = inst_bl;
+ assign dst_is_rj     = inst_rdcntid_w;
+-assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_ertn & ~inst_syscall;
++assign gr_we         = ~inst_st_b & ~inst_st_h & ~inst_st_w & ~inst_beq & ~inst_bne & ~inst_b & ~inst_blt & ~inst_bge & ~inst_bltu & ~inst_bgeu & ~inst_ertn & ~inst_syscall & ~inst_INVTLB & ~inst_TLBFILL & ~inst_TLBRD & ~inst_TLBWR & ~inst_TLBSRCH;
+ assign dest          = dst_is_r1 ? 5'd1 :
+                        dst_is_rj ? rj :
+                        rd;
+@@ -756,6 +977,8 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
+ 
+ 
+ /******** 分支判断块 ********/
++wire inst_INVTLB_op;
++assign inst_INVTLB_op = (inst_INVTLB && (op_4_0==5'h0 || op_4_0==5'h1 || op_4_0==5'h2 || op_4_0==5'h3 || op_4_0==5'h4 || op_4_0==5'h5 || op_4_0==5'h6));
+ assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
+ assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
+ 
+@@ -773,7 +996,7 @@ assign br_taken_ID = (   inst_beq  &&  rj_eq_rd
+                    || inst_bl
+                    || inst_b
+                    || inst_ertn
+-                   ) && ID_valid || exc_at_ID || has_int;
++) && ID_valid || exc_at_ID || has_int;
+ assign br_taken_EX = exc_at_EX;
+ // - 调整了一下br_target的优先级
+ assign br_target =  (wb_ex) ? ex_entry :
+diff --git a/csr.v b/csr.v
+index ad3134f..3d1ec5b 100644
+--- a/csr.v
++++ b/csr.v
+@@ -1,5 +1,12 @@
+ `include "csr.vh"
+-module csr(
++`define TLBNUM 16
++`define PALEN 32
++module csr
++#(
++    parameter TLBNUM = `TLBNUM,
++    parameter PALEN = `PALEN
++)
++(
+     input  wire        clk,
+     input  wire        reset,
+ 
+@@ -19,7 +26,37 @@ module csr(
+     output wire [31:0] ex_entry,
+     output wire [31:0] ex_epc,
+     output wire        has_int,
+-    output wire [31:0] counter_id
++    output wire [31:0] counter_id,
++    output wire [31:0] csr_tlbehi_rvalue,
++    output wire [31:0] csr_tlbelo0_rvalue,
++    output wire [31:0] csr_tlbelo1_rvalue,
++    output wire [31:0] csr_tlbidx_rvalue,
++    output wire [31:0] csr_asid_rvalue,
++    output wire [31:0] csr_dmw0_rvalue,
++    output wire [31:0] csr_dmw1_rvalue,
++    output wire [31:0] csr_estat_rvalue,
++    output wire [31:0] csr_tlbrentry_rvalue,
++    input  wire        inst_TLBSRCH_valid,
++    input  wire        inst_TLBRD_valid,
++    input  wire        inst_TLBWR_valid,
++    input  wire        inst_TLBFILL_valid,
++    input wire s1_found,
++    input wire [$clog2(TLBNUM) - 1:0] s1_index,
++    input  wire            r_e,
++    input  wire [ 18:0]    r_vppn,
++    input  wire [  5:0]    r_ps,
++    input  wire [  9:0]    r_asid,
++    input  wire            r_g,
++    input  wire [ 19:0]    r_ppn0,
++    input  wire [  1:0]    r_plv0,
++    input  wire [  1:0]    r_mat0,
++    input  wire            r_d0,
++    input  wire            r_v0,
++    input  wire [ 19:0]    r_ppn1,
++    input  wire [  1:0]    r_plv1,
++    input  wire [  1:0]    r_mat1,
++    input  wire            r_d1,
++    input  wire            r_v1
+ );
+ 
+ //CSR寄存器
+@@ -60,6 +97,43 @@ reg [29:0] csr_tcfg_initval;
+ wire [31:0] csr_tval_timeval;
+ //TICLR
+ wire       csr_ticlr_clr;
++//DMW0
++reg csr_dmw0_plv0;
++reg csr_dmw0_plv3;
++reg [1:0]csr_dmw0_mat;
++reg [2:0]csr_dmw0_pseg;
++reg [2:0]csr_dmw0_vseg;
++//DMW1
++reg csr_dmw1_plv0;
++reg csr_dmw1_plv3;
++reg [1:0]csr_dmw1_mat;
++reg [2:0]csr_dmw1_pseg;
++reg [2:0]csr_dmw1_vseg;
++//ASID
++reg [9:0]csr_asid_asid;
++reg [7:0]csr_asid_asidbits;
++//TLBEHI
++reg [18:0]csr_tlbehi_vppn;
++//TLBELO0、TLBELO1 
++reg csr_tlbelo0_v;
++reg csr_tlbelo0_d;
++reg [1:0]csr_tlbelo0_plv;
++reg [1:0]csr_tlbelo0_mat;
++reg csr_tlbelo0_g;
++reg [PALEN-13:0]csr_tlbelo0_ppn;
++
++reg csr_tlbelo1_v;
++reg csr_tlbelo1_d;
++reg [1:0]csr_tlbelo1_plv;
++reg [1:0]csr_tlbelo1_mat;
++reg csr_tlbelo1_g;
++reg [PALEN-13:0]csr_tlbelo1_ppn;
++//TLBIDX
++reg [$clog2(TLBNUM) - 1:0]csr_tlbidx_index;
++reg [5:0]csr_tlbidx_ps;
++reg csr_tlbidx_ne;
++//TLBRENTRY
++reg [25:0]csr_tlbrentry_pa;
+ 
+ //timer
+ reg [31:0] timer_cnt;
+@@ -68,7 +142,7 @@ wire [31:0] tcfg_next_value;
+ wire [31:0] csr_crmd_rvalue;
+ wire [31:0] csr_prmd_rvalue;
+ wire [31:0] csr_ecfg_rvalue;
+-wire [31:0] csr_estat_rvalue;
++// wire [31:0] csr_estat_rvalue;
+ wire [31:0] csr_era_rvalue;
+ wire [31:0] csr_badv_rvalue;
+ wire [31:0] csr_eentry_rvalue;
+@@ -76,6 +150,14 @@ wire [31:0] csr_tid_rvalue;
+ wire [31:0] csr_tcfg_rvalue;
+ wire [31:0] csr_tval_rvalue;
+ wire [31:0] csr_ticlr_rvalue;
++// wire [31:0] csr_tlbehi_rvalue;
++// wire [31:0] csr_tlbelo0_rvalue;
++// wire [31:0] csr_tlbelo1_rvalue;
++// wire [31:0] csr_tlbidx_rvalue;
++// wire [31:0] csr_asid_rvalue;
++// wire [31:0] csr_dmw0_rvalue;
++// wire [31:0] csr_dmw1_rvalue;
++
+ 
+ assign csr_crmd_rvalue = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,csr_crmd_ie,csr_crmd_plv};
+ assign csr_prmd_rvalue = {29'b0,csr_prmd_pie,csr_prmd_pplv};
+@@ -88,6 +170,15 @@ assign csr_tid_rvalue = csr_tid_tid;
+ assign csr_tcfg_rvalue = {csr_tcfg_initval,csr_tcfg_periodic,csr_tcfg_en};
+ assign csr_tval_rvalue = csr_tval_timeval;
+ assign csr_ticlr_rvalue = {31'b0,csr_ticlr_clr};
++assign csr_tlbehi_rvalue = {csr_tlbehi_vppn,13'b0};
++assign csr_tlbelo0_rvalue = {4'b0,csr_tlbelo0_ppn,1'b0,csr_tlbelo0_g,csr_tlbelo0_mat,csr_tlbelo0_plv,csr_tlbelo0_d,csr_tlbelo0_v};
++assign csr_tlbelo1_rvalue = {4'b0,csr_tlbelo1_ppn,1'b0,csr_tlbelo1_g,csr_tlbelo1_mat,csr_tlbelo1_plv,csr_tlbelo1_d,csr_tlbelo1_v};
++assign csr_tlbidx_rvalue = {csr_tlbidx_ne,1'b0,csr_tlbidx_ps,8'b0,12'b0,csr_tlbidx_index};
++assign csr_asid_rvalue = {8'b0,csr_asid_asidbits,6'b0,csr_asid_asid};
++assign csr_dmw0_rvalue = {csr_dmw0_vseg,1'b0,csr_dmw0_pseg,19'b0,csr_dmw0_mat,csr_dmw0_plv3,2'b0,csr_dmw0_plv0};
++assign csr_dmw1_rvalue = {csr_dmw1_vseg,1'b0,csr_dmw1_pseg,19'b0,csr_dmw1_mat,csr_dmw1_plv3,2'b0,csr_dmw1_plv0};
++assign csr_tlbrentry_rvalue = {csr_tlbrentry_pa,6'b0};
++
+ 
+ assign csr_rvalue =     csr_num == `CSR_CRMD   ? csr_crmd_rvalue :
+                         csr_num == `CSR_PRMD   ? csr_prmd_rvalue :
+@@ -104,6 +195,14 @@ assign csr_rvalue =     csr_num == `CSR_CRMD   ? csr_crmd_rvalue :
+                         csr_num == `CSR_TCFG   ? csr_tcfg_rvalue :
+                         csr_num == `CSR_TVAL   ? csr_tval_rvalue :
+                         csr_num == `CSR_TICLR  ? csr_ticlr_rvalue :
++                        csr_num == `CSR_TLBEHI ? csr_tlbehi_rvalue :
++                        csr_num == `CSR_TLBELO0? csr_tlbelo0_rvalue :
++                        csr_num == `CSR_TLBELO1? csr_tlbelo1_rvalue :
++                        csr_num == `CSR_TLBIDX ? csr_tlbidx_rvalue :
++                        csr_num == `CSR_ASID   ? csr_asid_rvalue :
++                        csr_num == `CSR_DMW0   ? csr_dmw0_rvalue :
++                        csr_num == `CSR_DMW1   ? csr_dmw1_rvalue :
++                        csr_num == `CSR_TLBRENTRY? csr_tlbrentry_rvalue :
+                         32'b0;
+ assign ex_entry = csr_eentry_rvalue;
+ assign ex_epc = csr_era_rvalue;
+@@ -299,4 +398,424 @@ end
+ //TICLR 的 CLR 域
+ assign csr_ticlr_clr = 1'b0;
+ 
++//ASID 的 ASID   域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_asid_asid <= 4'b0;
++    end
++    else if(csr_we && csr_num==`CSR_ASID) begin
++        csr_asid_asid <= csr_wmask[`CSR_ASID_ASID] & csr_wvalue[`CSR_ASID_ASID]
++                    |   ~csr_wmask[`CSR_ASID_ASID] & csr_asid_asid;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_asid_asid <= r_asid;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_asid_asid <= 4'b0;
++    end
++
++end
++//ASID 的 ASIDBITS  域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_asid_asidbits <= 8'h0a;
++    end
++    // else if(csr_we && csr_num==`CSR_ASID) begin
++    //     csr_asid_asidbits <= csr_wmask[`CSR_ASID_ASIDBITS] & csr_wvalue[`CSR_ASID_ASIDBITS]
++    //                 |   ~csr_wmask[`CSR_ASID_ASIDBITS] & csr_asid_asidbits;
++    // end
++end
++
++//TLBIDX 的 Index域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbidx_index <= 15'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBIDX) begin
++        csr_tlbidx_index <= csr_wmask[`CSR_TLBIDX_INDEX] & csr_wvalue[`CSR_TLBIDX_INDEX]
++                    |   ~csr_wmask[`CSR_TLBIDX_INDEX] & csr_tlbidx_index;
++    end
++    else if(inst_TLBSRCH_valid && s1_found) begin
++        csr_tlbidx_index <= s1_index;
++    end
++end
++//TLBIDX 的 PS域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbidx_ps <= 6'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBIDX) begin
++        csr_tlbidx_ps <= csr_wmask[`CSR_TLBIDX_PS] & csr_wvalue[`CSR_TLBIDX_PS]
++                    |   ~csr_wmask[`CSR_TLBIDX_PS] & csr_tlbidx_ps;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbidx_ps <= r_ps;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbidx_ps <= 6'b0;
++    end
++end
++//TLBIDX 的 NE域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbidx_ne <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBIDX) begin
++        csr_tlbidx_ne <= csr_wmask[`CSR_TLBIDX_NE] & csr_wvalue[`CSR_TLBIDX_NE]
++                    |   ~csr_wmask[`CSR_TLBIDX_NE] & csr_tlbidx_ne;
++    end
++    else if(inst_TLBSRCH_valid) begin
++        if(s1_found) begin
++            csr_tlbidx_ne <= 1'b0;
++        end
++        else begin
++            csr_tlbidx_ne <= 1'b1;
++        end
++    end
++    else if(inst_TLBRD_valid) begin
++        if(r_e) begin
++        csr_tlbidx_ne <= 1'b0;
++        end
++        else begin
++            csr_tlbidx_ne <= 1'b1;
++        end
++    end
++end
++
++//TLBEHI 的 VPPN域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbehi_vppn <= 19'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBEHI) begin
++        csr_tlbehi_vppn <= csr_wmask[`CSR_TLBEHI_VPPN] & csr_wvalue[`CSR_TLBEHI_VPPN]
++                    |   ~csr_wmask[`CSR_TLBEHI_VPPN] & csr_tlbehi_vppn;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbehi_vppn <= r_vppn;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbehi_vppn <= 19'b0;
++    end
++end
++
++//TLBELO0 的 V域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_v <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_v <= csr_wmask[`CSR_TLBELO0_V] & csr_wvalue[`CSR_TLBELO0_V]
++                    |   ~csr_wmask[`CSR_TLBELO0_V] & csr_tlbelo0_v;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_v <= r_v0;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_v <= 1'b0;
++    end
++end
++
++//TLBELO0 的 G域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_g <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_g <= csr_wmask[`CSR_TLBELO0_G] & csr_wvalue[`CSR_TLBELO0_G]
++                    |   ~csr_wmask[`CSR_TLBELO0_G] & csr_tlbelo0_g;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_g <= r_g;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_g <= 1'b0;
++    end
++end
++
++//TLBELO0 的 D域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_d <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_d <= csr_wmask[`CSR_TLBELO0_D] & csr_wvalue[`CSR_TLBELO0_D]
++                    |   ~csr_wmask[`CSR_TLBELO0_D] & csr_tlbelo0_d;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_d <= r_d0;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_d <= 1'b0;
++    end
++end
++
++//TLBELO0 的 PLV域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_plv <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_plv <= csr_wmask[`CSR_TLBELO0_PLV] & csr_wvalue[`CSR_TLBELO0_PLV]
++                    |   ~csr_wmask[`CSR_TLBELO0_PLV] & csr_tlbelo0_plv;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_plv <= r_plv0;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_plv <= 2'b0;
++    end
++end
++//TLBELO0 的 MAT域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_mat <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_mat <= csr_wmask[`CSR_TLBELO0_MAT] & csr_wvalue[`CSR_TLBELO0_MAT]
++                    |   ~csr_wmask[`CSR_TLBELO0_MAT] & csr_tlbelo0_mat;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_mat <= r_mat0;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_mat <= 2'b0;
++    end
++end
++
++//TLBELO0 的 PPN域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo0_ppn <= 20'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO0) begin
++        csr_tlbelo0_ppn <= csr_wmask[`CSR_TLBELO0_PPN] & csr_wvalue[`CSR_TLBELO0_PPN]
++                    |   ~csr_wmask[`CSR_TLBELO0_PPN] & csr_tlbelo0_ppn;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo0_ppn <= r_ppn0;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo0_ppn <= 20'b0;
++    end
++end
++
++//TLBELO1 的 V域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_v <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_v <= csr_wmask[`CSR_TLBELO1_V] & csr_wvalue[`CSR_TLBELO1_V]
++                    |   ~csr_wmask[`CSR_TLBELO1_V] & csr_tlbelo1_v;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_v <= r_v1;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_v <= 1'b0;
++    end
++end
++
++//TLBELO1 的 G域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_g <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_g <= csr_wmask[`CSR_TLBELO1_G] & csr_wvalue[`CSR_TLBELO1_G]
++                    |   ~csr_wmask[`CSR_TLBELO1_G] & csr_tlbelo1_g;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_g <= r_g;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_g <= 1'b0;
++    end
++end
++
++//TLBELO1 的 D域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_d <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_d <= csr_wmask[`CSR_TLBELO1_D] & csr_wvalue[`CSR_TLBELO1_D]
++                    |   ~csr_wmask[`CSR_TLBELO1_D] & csr_tlbelo1_d;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_d <= r_d1;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_d <= 1'b0;
++    end
++end
++
++//TLBELO1 的 PLV域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_plv <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_plv <= csr_wmask[`CSR_TLBELO1_PLV] & csr_wvalue[`CSR_TLBELO1_PLV]
++                    |   ~csr_wmask[`CSR_TLBELO1_PLV] & csr_tlbelo1_plv;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_plv <= r_plv1;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_plv <= 2'b0;
++    end
++end
++//TLBELO1 的 MAT域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_mat <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_mat <= csr_wmask[`CSR_TLBELO1_MAT] & csr_wvalue[`CSR_TLBELO1_MAT]
++                    |   ~csr_wmask[`CSR_TLBELO1_MAT] & csr_tlbelo1_mat;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_mat <= r_mat1;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_mat <= 2'b0;
++    end
++end
++
++//TLBELO1 的 PPN域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbelo1_ppn <= 20'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBELO1) begin
++        csr_tlbelo1_ppn <= csr_wmask[`CSR_TLBELO1_PPN] & csr_wvalue[`CSR_TLBELO1_PPN]
++                    |   ~csr_wmask[`CSR_TLBELO1_PPN] & csr_tlbelo1_ppn;
++    end
++    else if(inst_TLBRD_valid && r_e) begin
++        csr_tlbelo1_ppn <= r_ppn1;
++    end
++    else if(inst_TLBRD_valid && !r_e) begin
++        csr_tlbelo1_ppn <= 20'b0;
++    end
++end
++
++//DMW0 的 PLV0域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw0_plv0 <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW0) begin
++        csr_dmw0_plv0 <= csr_wmask[`CSR_DMW0_PLV0] & csr_wvalue[`CSR_DMW0_PLV0]
++                    |   ~csr_wmask[`CSR_DMW0_PLV0] & csr_dmw0_plv0;
++    end
++end
++//DMW0 的 PLV3域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw0_plv3 <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW0) begin
++        csr_dmw0_plv3 <= csr_wmask[`CSR_DMW0_PLV3] & csr_wvalue[`CSR_DMW0_PLV3]
++                    |   ~csr_wmask[`CSR_DMW0_PLV3] & csr_dmw0_plv3;
++    end
++end
++//DMW0 的 MAT域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw0_mat <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW0) begin
++        csr_dmw0_mat <= csr_wmask[`CSR_DMW0_MAT] & csr_wvalue[`CSR_DMW0_MAT]
++                    |   ~csr_wmask[`CSR_DMW0_MAT] & csr_dmw0_mat;
++    end
++end
++
++//DMW0 的 PSEG域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw0_pseg <= 3'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW0) begin
++        csr_dmw0_pseg <= csr_wmask[`CSR_DMW0_PSEG] & csr_wvalue[`CSR_DMW0_PSEG]
++                    |   ~csr_wmask[`CSR_DMW0_PSEG] & csr_dmw0_pseg;
++    end
++end
++//DMW0 的 VSEG域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw0_vseg <= 3'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW0) begin
++        csr_dmw0_vseg <= csr_wmask[`CSR_DMW0_VSEG] & csr_wvalue[`CSR_DMW0_VSEG]
++                    |   ~csr_wmask[`CSR_DMW0_VSEG] & csr_dmw0_vseg;
++    end
++end
++
++//DMW1 的 PLV0域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw1_plv0 <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW1) begin
++        csr_dmw1_plv0 <= csr_wmask[`CSR_DMW1_PLV0] & csr_wvalue[`CSR_DMW1_PLV0]
++                    |   ~csr_wmask[`CSR_DMW1_PLV0] & csr_dmw1_plv0;
++    end
++end
++//DMW1 的 PLV3域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw1_plv3 <= 1'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW1) begin
++        csr_dmw1_plv3 <= csr_wmask[`CSR_DMW1_PLV3] & csr_wvalue[`CSR_DMW1_PLV3]
++                    |   ~csr_wmask[`CSR_DMW1_PLV3] & csr_dmw1_plv3;
++    end
++end
++//DMW1 的 MAT域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw1_mat <= 2'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW1) begin
++        csr_dmw1_mat <= csr_wmask[`CSR_DMW1_MAT] & csr_wvalue[`CSR_DMW1_MAT]
++                    |   ~csr_wmask[`CSR_DMW1_MAT] & csr_dmw1_mat;
++    end
++end
++
++//DMW1 的 PSEG域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw1_pseg <= 3'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW1) begin
++        csr_dmw1_pseg <= csr_wmask[`CSR_DMW1_PSEG] & csr_wvalue[`CSR_DMW1_PSEG]
++                    |   ~csr_wmask[`CSR_DMW1_PSEG] & csr_dmw1_pseg;
++    end
++end
++//DMW1 的 VSEG域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_dmw1_vseg <= 3'b0;
++    end
++    else if(csr_we && csr_num==`CSR_DMW1) begin
++        csr_dmw1_vseg <= csr_wmask[`CSR_DMW1_VSEG] & csr_wvalue[`CSR_DMW1_VSEG]
++                    |   ~csr_wmask[`CSR_DMW1_VSEG] & csr_dmw1_vseg;
++    end
++end
++//TLBRENTRY 的 pa域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_tlbrentry_pa <= 26'b0;
++    end
++    else if(csr_we && csr_num==`CSR_TLBRENTRY) begin
++        csr_tlbrentry_pa <= csr_wmask[`CSR_TLBRENTRY_PA] & csr_wvalue[`CSR_TLBRENTRY_PA]
++                    |   ~csr_wmask[`CSR_TLBRENTRY_PA] & csr_tlbrentry_pa;
++    end
++end
++
++
++
++
+ endmodule
+\ No newline at end of file
+diff --git a/csr.vh b/csr.vh
+index 899826a..84a2f76 100644
+--- a/csr.vh
++++ b/csr.vh
+@@ -13,6 +13,15 @@
+ `define CSR_TCFG 13'h41
+ `define CSR_TVAL 13'h42
+ `define CSR_TICLR 13'h44
++`define CSR_DMW0 13'h180
++`define CSR_DMW1 13'h181
++`define CSR_ASID 13'h18
++`define CSR_TLBEHI 13'h11
++`define CSR_TLBELO0 13'h12
++`define CSR_TLBELO1 13'h13
++`define CSR_TLBIDX  13'h10
++`define CSR_TLBRENTRY 13'h88
++
+ 
+ `define CSR_CRMD_PLV 1:0
+ `define CSR_CRMD_IE  2
+@@ -51,9 +60,42 @@
+ 
+ `define CSR_TICLR_CLR 0
+ 
+-
+-
+-
++`define CSR_ASID_ASID 9:0
++`define CSR_ASID_ASIDBITS 23:16
++
++`define CSR_TLBIDX_INDEX 3:0
++`define CSR_TLBIDX_PS  29:24
++`define CSR_TLBIDX_NE  31
++
++`define CSR_TLBEHI_VPPN 31:13
++
++`define CSR_TLBELO0_V 0
++`define CSR_TLBELO0_D 1
++`define CSR_TLBELO0_PLV 3:2
++`define CSR_TLBELO0_MAT 5:4
++`define CSR_TLBELO0_G 6
++`define CSR_TLBELO0_PPN 31:8
++
++`define CSR_TLBELO1_V 0
++`define CSR_TLBELO1_D 1
++`define CSR_TLBELO1_PLV 3:2
++`define CSR_TLBELO1_MAT 5:4
++`define CSR_TLBELO1_G 6
++`define CSR_TLBELO1_PPN 31:8
++
++`define CSR_DMW0_PLV0 0
++`define CSR_DMW0_PLV3 3
++`define CSR_DMW0_MAT 5:4
++`define CSR_DMW0_PSEG 27:25
++`define CSR_DMW0_VSEG 31:29
++
++`define CSR_DMW1_PLV0 0
++`define CSR_DMW1_PLV3 3
++`define CSR_DMW1_MAT 5:4
++`define CSR_DMW1_PSEG 27:25
++`define CSR_DMW1_VSEG 31:29
++
++`define CSR_TLBRENTRY_PA 31:6
+ `define ECODE_INT 6'h0
+ `define ECODE_PIL 6'h1
+ `define ECODE_PIS 6'h2
+diff --git a/tlb.v b/tlb.v
+index 106156c..7fcb2fa 100644
+--- a/tlb.v
++++ b/tlb.v
+@@ -201,6 +201,9 @@ always @ (posedge clk) begin
+         tlb_d1   [w_index] <= w_d1;
+         tlb_v1   [w_index] <= w_v1;
+     end
++    else if(!we && invtlb_valid) begin
++        tlb_e <= ~invtlb_op_num[invtlb_op]; //对于 INVTLB 指令来说，将对应 TLB 表项无效的操作就是将 inv_match[i] 等于 1 对应的 tlb_e[i] 置为 0。
++    end
+ end
+ 
+ //读操作
+@@ -240,10 +243,9 @@ assign invtlb_op_num[4] = cond1 & cond3;
+ assign invtlb_op_num[5] = cond1 & cond3 & cond4;  
+ assign invtlb_op_num[6] = (cond2 | cond3) & cond4;  
+ 
+-//对于 INVTLB 指令来说，将对应 TLB 表项无效的操作就是将 inv_match[i] 等于 1 对应的 tlb_e[i] 置为 0。
+-always @ (posedge clk) begin
+-    if(!we && invtlb_valid)
+-        tlb_e <= ~invtlb_op_num[invtlb_op]; 
+-end
++
++// always @ (posedge clk) begin
++    
++// end
+ 
+ endmodule
+\ No newline at end of file
+-- 
+2.47.0
+

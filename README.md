@@ -57,13 +57,14 @@ FINISH exp16 AT 2024/10/23
 
 FINISH exp17 AT 2024/11/10
 
+#### exp18
+- [x]  在 CPU 中增加 `TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB` 指令;
+- [x]  在 CPU 中增加 `TLBIDX`、`TLBEHI`、`TLBELO0`、`TLBELO1`、`ASID`、`TLBRENTRY` 等 CSR 寄存器;
+
 ## 任务
 
 ### 存储管理单元设计
 
-#### exp18
-- [ ]  在 CPU 中增加 `TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB` 指令;
-- [ ]  在 CPU 中增加 `TLBIDX`、`TLBEHI`、`TLBELO0`、`TLBELO1`、`ASID`、`TLBRENTRY` 等 CSR 寄存器;
 
 #### exp19
 - [ ]  为 CPU 增加 TLB 相关异常：TLB 重填例外、load/store/取指操作页无效例外、页修改例
