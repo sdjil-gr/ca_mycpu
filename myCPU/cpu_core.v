@@ -54,8 +54,7 @@ wire [31:0] br_target;
 wire [31:0] inst;
 reg  [31:0] pc;
 
-wire [14:0] alu_op;
-wire        load_op;
+wire [11:0] alu_op;
 wire        src1_is_pc;
 wire        src2_is_imm;
 wire        res_from_mem;
@@ -83,6 +82,7 @@ wire        reg_EX_hit;
 wire        reg_MEM_hit;
 wire        reg_WB_hit;
 wire        hit_wait;
+wire        TLBSRCH_wait;
 wire [4: 0] dest_EX_ID;
 wire [4: 0] dest_MEM_ID;
 wire [4: 0] dest_WB_ID;
@@ -188,14 +188,25 @@ wire        inst_TLBSRCH_valid;
 wire        inst_TLBRD_valid;
 wire        inst_TLBWR_valid;
 wire        inst_TLBFILL_valid;
+wire        inst_INVTLB_op;
 //异常触发信号
 wire        exc_at_ID;       //在ID阶段发生异常 
 wire        exc_at_EX;       //在EX阶段发生异常
+wire        exc_tlbr_inst;   //TLB重填异常（指令）
+wire        exc_pif;         //取指操作页无效异常
+wire        exc_tlbr_data;   //TLB重填异常（数据）
+wire        exc_pil;         //读内存操作页无效异常
+wire        exc_pis;         //写内存操作页无效异常
+wire        exc_pme;         //页修改例外
+wire        exc_ppi_inst;     //页特权异常（指令）
+wire        exc_ppi_data;     //页特权异常（数据）
 wire        exc_adef;        //取指地址异常
 wire        exc_ale;         //地址非对齐异常
 wire        exc_ine;         //指令不存在异常
 wire        exc_break;       //断点异常
 wire        exc_syscall;     //系统调用异常
+
+wire        exc_of_addr;
 
 //csr指令接口
 wire csr_we;
@@ -207,6 +218,7 @@ wire [31:0] csr_rvalue;
 //csr其他接口
 wire        wb_ex;
 wire [31:0] wb_pc;
+wire [31:0] wb_vaddr;
 wire        ertn_flush;
 wire [ 5:0] wb_ecode;
 wire [ 8:0] wb_esubcode;
@@ -215,15 +227,90 @@ wire [31:0] ex_epc;
 wire        has_int;
 wire        has_int_from_csr;
 wire [31:0] counter_id;
-wire [31:0] csr_tlbehi_rvalue;
+wire [18:0] tlbehi_vppn;
 wire [31:0] csr_tlbelo0_rvalue;
 wire [31:0] csr_tlbelo1_rvalue;
 wire [31:0] csr_tlbidx_rvalue;
-wire [31:0] csr_asid_rvalue;
-wire [31:0] csr_dmw0_rvalue;
-wire [31:0] csr_dmw1_rvalue;
+wire [ 9:0] asid;
+wire [ 1:0] plv;
+wire        da;
+wire        pg;
 wire [31:0] csr_estat_rvalue;
 wire [31:0] csr_tlbrentry_rvalue;
+
+wire [ 2:0] addr_vseg0;
+wire [ 2:0] addr_vseg1;
+wire        dmw_hit0;
+wire        dmw_hit1;
+wire [ 2:0] addr_pseg0;
+wire [ 2:0] addr_pseg1;
+
+// search port 0 (for fetch)
+wire [ 18:0]    s0_vppn;
+wire            s0_va_bit12;
+wire [  9:0]    s0_asid;
+wire            s0_found;
+wire [$clog2(TLBNUM) - 1:0] s0_index;
+wire [ 19:0]    s0_ppn;
+wire [  5:0]    s0_ps;
+wire [  1:0]    s0_plv;
+wire [  1:0]    s0_mat;
+wire            s0_d;
+wire            s0_v;
+
+// search port 1 (for load/store)
+wire [ 18:0]    s1_vppn;
+wire            s1_va_bit12;
+wire [  9:0]    s1_asid;
+wire            s1_found;
+wire [$clog2(TLBNUM) - 1:0] s1_index;
+wire [ 19:0]    s1_ppn;
+wire [  5:0]    s1_ps;
+wire [  1:0]    s1_plv;
+wire [  1:0]    s1_mat;
+wire            s1_d;
+wire            s1_v;
+
+// invtlb opcode
+wire            invtlb_valid;
+wire [ 4:0]     invtlb_op;
+
+// write port
+wire            we; //w(rite) e(nable)
+wire [$clog2(TLBNUM) - 1:0] w_index;
+wire            w_e;
+wire [ 18:0]    w_vppn;
+wire [  5:0]    w_ps;
+wire [  9:0]    w_asid;
+wire            w_g;
+wire [ 19:0]    w_ppn0;
+wire [  1:0]    w_plv0;
+wire [  1:0]    w_mat0;
+wire            w_d0;
+wire            w_v0;
+wire [ 19:0]    w_ppn1;
+wire [  1:0]    w_plv1;
+wire [  1:0]    w_mat1;
+wire            w_d1;
+wire            w_v1;
+
+// read port
+wire [$clog2(TLBNUM) - 1:0] r_index;
+wire            r_e;
+wire [ 18:0]    r_vppn;
+wire [  5:0]    r_ps;
+wire [  9:0]    r_asid;
+wire            r_g;
+wire [ 19:0]    r_ppn0;
+wire [  1:0]    r_plv0;
+wire [  1:0]    r_mat0;
+wire            r_d0;
+wire            r_v0;
+wire [ 19:0]    r_ppn1;
+wire [  1:0]    r_plv1;
+wire [  1:0]    r_mat1;
+wire            r_d1;
+wire            r_v1;
 
 wire        need_ui5;
 wire        need_si12;
@@ -267,7 +354,10 @@ wire [31:0] data_sram_rdata_off;
 reg [31:0] pc_ID, pc_EX, pc_MEM, pc_WB;
 reg [31:0] alu_src1_r;
 reg [31:0] alu_src2_r;
-reg [14:0] alu_op_r;
+reg [11:0] alu_op_r;
+reg        mul_r;
+reg        mul_high_r;
+reg        mul_hign_unsigned_r;
 reg        need_div_r;
 reg        div_unsigned_r;
 reg        div_signed_r;
@@ -288,6 +378,7 @@ reg [ 1:0] data_sram_addroffset_WB;
 reg        res_from_mem_EX;
 reg        res_from_mem_MEM;
 reg        res_from_mem_WB;
+reg [31:0] alu_result_MEM;
 reg [31:0] alu_result_WB;
 reg [ 4:0] dest_EX;
 reg [ 4:0] dest_MEM;
@@ -309,10 +400,12 @@ reg br_taken_EX_r;
 reg [31:0]br_target_r;
 //指令寄存器
 reg [31:0]inst_reg;
+reg [31:0]inst_remain_reg;
+reg       inst_remain_valid;
 
 //添加握手信号
 wire IF_valid;
-wire IF_allowin;
+// wire IF_allowin;
 wire IF_readygo;
 
 reg ID_valid;
@@ -334,8 +427,8 @@ wire WB_readygo;
 
 //握手信号处理
 /****************************************************************************/
-assign IF_readygo = inst_addr_rcv && inst_sram_data_ok || exc_adef;
-assign ID_readygo = valid_r ? !hit_wait : 1'b1;//访存前递阻塞
+assign IF_readygo = (inst_addr_rcv && inst_sram_data_ok) || exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst;
+assign ID_readygo = valid_r ? (!hit_wait && !TLBSRCH_wait) : 1'b1;//访存前递阻塞
 assign EX_readygo = !need_div_r;//阻塞除法
 assign MEM_readygo = data_addr_rcv && data_sram_data_ok || !data_sram_req_MEM;
 assign WB_readygo = 1'b1;
@@ -370,7 +463,7 @@ end
 always @(posedge clk) begin
 	if (reset)
 		MEM_valid <= 1'b0;
-    else if(exc_ale && MEM_allowin)//地址非对齐异常则取消该访存指令
+    else if((exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data) && MEM_allowin)//访存地址异常则取消该访存指令
 		MEM_valid <= 1'b0;
 	else if(MEM_allowin)
 		MEM_valid <= EX_valid && EX_readygo;
@@ -454,9 +547,19 @@ assign csr_wmask = (inst_csrwr)? 32'hffffffff :
 assign csr_wvalue = rkd_value;
 
 //异常判断
-assign exc_adef = pc[1:0] != 2'b00;
-assign exc_ale  = (data_sram_type_tag_EX[2] && data_sram_addr_EX[0] != 1'b0
-                || data_sram_type_tag_EX[1] && data_sram_addr_EX[1:0] != 2'b0) && EX_valid;
+assign exc_tlbr_inst = da ? 1'b0 : (!dmw_hit0 && !s0_found && IF_valid);
+assign exc_pif = da ? 1'b0 : (!s0_v && IF_valid);
+assign exc_tlbr_data = da ? 1'b0 : (!dmw_hit1 && !s1_found && data_sram_req_EX && EX_valid);
+assign exc_pil = da ? 1'b0 : (!s1_v && !data_sram_wr_EX && data_sram_req_EX && EX_valid);
+assign exc_pis = da ? 1'b0 : (!s1_v &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
+assign exc_pme = da ? 1'b0 : (!s1_d &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
+
+assign exc_ppi_inst = da ? 1'b0 : ((plv > s0_plv) && IF_valid);
+assign exc_ppi_data = da ? 1'b0 : ((plv > s1_plv) && data_sram_req_EX && EX_valid);
+
+assign exc_adef = (pc[1:0] != 2'b00) && IF_valid;
+assign exc_ale  = (data_sram_type_tag_EX[2] && alu_result[0] != 1'b0
+                || data_sram_type_tag_EX[1] && alu_result[1:0] != 2'b0) && EX_valid;
 assign exc_ine = ~(inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | inst_and | inst_or | inst_xor 
                  | inst_slli_w | inst_srli_w | inst_srai_w | inst_addi_w | inst_ld_w | inst_st_w 
                  | inst_jirl | inst_b | inst_bl | inst_beq | inst_bne | inst_lu12i_w 
@@ -471,20 +574,34 @@ assign exc_ine = ~(inst_add_w | inst_sub_w | inst_slt | inst_sltu | inst_nor | i
 assign exc_break = inst_break && ID_valid;
 assign exc_syscall = inst_syscall && ID_valid;
 
-assign exc_at_ID = exc_break || exc_syscall || exc_adef || exc_ine;
-assign exc_at_EX = exc_ale;
+assign exc_at_ID = exc_break || exc_syscall || exc_adef || exc_ine || exc_tlbr_inst || exc_pif || exc_ppi_inst;
+assign exc_at_EX = exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data;
+
+assign exc_of_addr = exc_tlbr_inst || exc_pif || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_inst || exc_ppi_data;
 
 assign has_int = has_int_from_csr && ID_valid;
 
 assign wb_ex = exc_at_ID || exc_at_EX || has_int;
 
-assign wb_pc =  (exc_adef) ? pc :
-                (exc_ale)  ? pc_EX :
+assign wb_pc =  (exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst) ? pc :
+                (exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data)  ? pc_EX :
                 pc_ID;
+assign wb_vaddr = (exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst) ? pc :
+                (exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data) ? alu_result :
+                pc_ID;
+
 assign ertn_flush = inst_ertn && ID_valid;
 assign wb_ecode = has_int     ? `ECODE_INT :
                   exc_adef    ? `ECODE_ADE :
+                  exc_tlbr_inst? `ECODE_TLBR :
+                  exc_pif     ? `ECODE_PIF :
+                  exc_ppi_inst? `ECODE_PPI :
                   exc_ale     ? `ECODE_ALE : 
+                  exc_tlbr_data? `ECODE_TLBR :
+                  exc_pil     ? `ECODE_PIL :
+                  exc_pis     ? `ECODE_PIS :
+                  exc_ppi_data? `ECODE_PPI :
+                  exc_pme     ? `ECODE_PME :
                   exc_syscall ? `ECODE_SYS :
                   exc_break   ? `ECODE_BRK : 
                   exc_ine     ? `ECODE_INE :
@@ -495,38 +612,58 @@ assign inst_TLBSRCH_valid = inst_TLBSRCH && ID_valid;
 assign inst_TLBRD_valid = inst_TLBRD && ID_valid;
 assign inst_TLBWR_valid = inst_TLBWR && ID_valid;
 assign inst_TLBFILL_valid = inst_TLBFILL && ID_valid;
+
+assign addr_vseg0 = pc[31:29];
+assign addr_vseg1 = alu_result[31:29];
+
 csr u_csr(
     .clk(clk),
     .reset(reset),
+
     .csr_we(csr_we),
     .csr_re(csr_re),
     .csr_num(csr_num),
     .csr_wmask(csr_wmask),
     .csr_wvalue(csr_wvalue),
     .csr_rvalue(csr_rvalue),
+
     .wb_ex(wb_ex),
     .ertn_flush(ertn_flush),
     .wb_ecode(wb_ecode),
     .wb_esubcode(wb_esubcode),
     .wb_pc(wb_pc),
-    .wb_vaddr(data_sram_addr_EX),
+    .wb_badv(exc_of_addr),
+    .wb_vaddr(wb_vaddr),
+    .wb_tlbr(exc_tlbr_inst || exc_tlbr_data),
+
     .ex_entry(ex_entry),
     .ex_epc(ex_epc),
     .has_int(has_int_from_csr),
     .counter_id(counter_id),
-    .csr_tlbehi_rvalue(csr_tlbehi_rvalue),
+
     .csr_tlbelo0_rvalue(csr_tlbelo0_rvalue),
     .csr_tlbelo1_rvalue(csr_tlbelo1_rvalue),
     .csr_tlbidx_rvalue(csr_tlbidx_rvalue),
-    .csr_asid_rvalue(csr_asid_rvalue),
-    .csr_dmw0_rvalue(csr_dmw0_rvalue),
-    .csr_dmw1_rvalue(csr_dmw1_rvalue),
     .csr_estat_rvalue(csr_estat_rvalue),
     .csr_tlbrentry_rvalue(csr_tlbrentry_rvalue),
+    .tlbehi_vppn(tlbehi_vppn),
+    .asid(asid),
+    .plv(plv),
+    .da(da),
+    .pg(pg),
+
+    .addr_vseg0(addr_vseg0),
+    .addr_vseg1(addr_vseg1),
+    .dmw_hit0(dmw_hit0),
+    .dmw_hit1(dmw_hit1),
+    .addr_pseg0(addr_pseg0),
+    .addr_pseg1(addr_pseg1),
+
     .inst_TLBSRCH_valid(inst_TLBSRCH_valid),
     .inst_TLBRD_valid(inst_TLBRD_valid),
     .inst_TLBWR_valid(inst_TLBWR_valid),
     .inst_TLBFILL_valid(inst_TLBFILL_valid),
+
     .s1_found(s1_found),
     .s1_index(s1_index),
     .r_e(r_e),
@@ -546,75 +683,12 @@ csr u_csr(
     .r_v1(r_v1)
 );
 /****************************************************************************/
-// search port 0 (for fetch)
-    wire [ 18:0]    s0_vppn;
-    wire            s0_va_bit12;
-    wire [  9:0]    s0_asid;
-    wire            s0_found;
-    wire [$clog2(TLBNUM) - 1:0] s0_index;
-    wire [ 19:0]    s0_ppn;
-    wire [  5:0]    s0_ps;
-    wire [  1:0]    s0_plv;
-    wire [  1:0]    s0_mat;
-    wire            s0_d;
-    wire            s0_v;
 
-    // search port 1 (for load/store)
-    wire [ 18:0]    s1_vppn;
-    wire            s1_va_bit12;
-    wire [  9:0]    s1_asid;
-    wire            s1_found;
-    wire [$clog2(TLBNUM) - 1:0] s1_index;
-    wire [ 19:0]    s1_ppn;
-    wire [  5:0]    s1_ps;
-    wire [  1:0]    s1_plv;
-    wire [  1:0]    s1_mat;
-    wire            s1_v;
-
-    // invtlb opcode
-    wire            invtlb_valid;
-    wire [ 4:0]     invtlb_op;
-
-    // write port
-    wire            we; //w(rite) e(nable)
-    wire [$clog2(TLBNUM) - 1:0] w_index;
-    wire            w_e;
-    wire [ 18:0]    w_vppn;
-    wire [  5:0]    w_ps;
-    wire [  9:0]    w_asid;
-    wire            w_g;
-    wire [ 19:0]    w_ppn0;
-    wire [  1:0]    w_plv0;
-    wire [  1:0]    w_mat0;
-    wire            w_d0;
-    wire            w_v0;
-    wire [ 19:0]    w_ppn1;
-    wire [  1:0]    w_plv1;
-    wire [  1:0]    w_mat1;
-    wire            w_d1;
-    wire            w_v1;
-
-    // read port
-    wire [$clog2(TLBNUM) - 1:0] r_index;
-    wire            r_e;
-    wire [ 18:0]    r_vppn;
-    wire [  5:0]    r_ps;
-    wire [  9:0]    r_asid;
-    wire            r_g;
-    wire [ 19:0]    r_ppn0;
-    wire [  1:0]    r_plv0;
-    wire [  1:0]    r_mat0;
-    wire            r_d0;
-    wire            r_v0;
-    wire [ 19:0]    r_ppn1;
-    wire [  1:0]    r_plv1;
-    wire [  1:0]    r_mat1;
-    wire            r_d1;
-    wire            r_v1;
 tlb  u_tlb(
-   .clk(clk),
-   .s0_vppn(s0_vppn),
-   .s0_va_bit12(s0_va_bit12),
+    .clk(clk),
+
+    .s0_vppn(s0_vppn),
+    .s0_va_bit12(s0_va_bit12),
     .s0_asid(s0_asid),
     .s0_found(s0_found),
     .s0_index(s0_index),
@@ -626,7 +700,7 @@ tlb  u_tlb(
     .s0_v(s0_v),
 
     .s1_vppn(s1_vppn),
-   .s1_va_bit12(s1_va_bit12),
+    .s1_va_bit12(s1_va_bit12),
     .s1_asid(s1_asid),
     .s1_found(s1_found),
     .s1_index(s1_index),
@@ -678,9 +752,21 @@ tlb  u_tlb(
 assign invtlb_valid = inst_INVTLB && ID_valid;
 assign invtlb_op = op_4_0;
 
-assign s1_vppn = (inst_TLBSRCH)?csr_tlbehi_rvalue[31:13]:(inst_INVTLB)?rf_rdata2[31:13]:data_sram_addr_EX[31:13];
-assign s1_va_bit12 = (inst_TLBSRCH)?1'b0:(inst_INVTLB)?rf_rdata2[12]:data_sram_addr_EX[12];
-assign s1_asid = (inst_TLBSRCH) ? csr_asid_rvalue[9:0] :(inst_INVTLB) ?rf_rdata1[9:0]:10'h0;
+// TLBSRCH 与 INVTLB 处于 ID 级，但是要与处于 EX 级的访存指令共用一个 TLB 查询端口，因此需要冲突时将 TLB相关指令延后一周期
+
+assign TLBSRCH_wait = (inst_TLBSRCH || inst_INVTLB) && ID_valid && (data_sram_req_EX && EX_valid);
+
+assign s0_vppn = pc[31:13];
+assign s0_va_bit12 = pc[12];
+assign s0_asid = asid;
+
+assign s1_vppn = (data_sram_req_EX && EX_valid) ? alu_result[31:13] :
+                 inst_TLBSRCH ? tlbehi_vppn :
+                 inst_INVTLB  ? rf_rdata2[31:13] : 32'b0;
+assign s1_va_bit12 = (data_sram_req_EX && EX_valid) ? alu_result[12] :
+                     inst_TLBSRCH ? 1'b0 :
+                     inst_INVTLB  ? rf_rdata2[12] : 1'b0;
+assign s1_asid = (inst_INVTLB) ?rf_rdata1[9:0] : asid;
 
 assign r_index = csr_tlbidx_rvalue[3:0];
 
@@ -688,9 +774,9 @@ assign we = (inst_TLBWR|inst_TLBFILL) && ID_valid;
 assign w_index =(inst_TLBWR)? csr_tlbidx_rvalue[3:0] : 4'h0;
 assign w_e = (csr_estat_rvalue[21:16]==6'h3f)? 1'b1 : 
              (csr_tlbidx_rvalue[31]==1'h0)? 1'b1 : 1'b0;
-assign w_vppn = csr_tlbehi_rvalue[31:13];
+assign w_vppn = tlbehi_vppn;
 assign w_ps = csr_tlbidx_rvalue[5:0];
-assign w_asid = csr_asid_rvalue[9:0];
+assign w_asid = asid;
 assign w_g = csr_tlbelo0_rvalue[6];
 assign w_ppn0 = csr_tlbelo0_rvalue[31:8];
 assign w_plv0 = csr_tlbelo0_rvalue[3:2];
@@ -706,19 +792,35 @@ assign w_v1 = csr_tlbelo1_rvalue[0];
 
 //IF流水级
 /****************************************************************************/
-assign inst_sram_req    = !inst_addr_rcv && ID_allowin && !exc_adef;//取值地址异常时不进行取指
+assign inst_sram_req    = !inst_remain_valid && !inst_addr_rcv && ID_allowin && !exc_adef && !exc_tlbr_inst && !exc_pif && !exc_ppi_inst;//取值地址异常时不进行取指
 assign inst_sram_wr     = 1'b0;
 assign inst_sram_size   = 2'b10;
-assign inst_sram_addr   = pc;
+assign inst_sram_addr   = da ? pc :
+                          pg ? (
+                            dmw_hit0 ? {addr_pseg0, pc[28:0]}:
+                            (s0_ps == 12)? {s0_ppn[19:0], pc[11:0]}:
+                            {s0_ppn[19:9], pc[20:0]}
+                          ) : 32'b0;
 assign inst_sram_wdata  = 32'b0;
-assign inst = (inst_addr_rcv && inst_sram_data_ok) ? inst_sram_rdata : inst_reg;
+assign inst = inst_reg;
 
 always @(posedge clk) begin
     if (reset) begin
         inst_reg <= 32'h0;
+        inst_remain_reg <= 32'h0;
+        inst_remain_valid <= 1'b0;
     end
     else if(inst_addr_rcv && inst_sram_data_ok)begin
-        inst_reg <= inst_sram_rdata;
+        if(ID_allowin)
+            inst_reg <= inst_sram_rdata;
+        else begin
+            inst_remain_reg <= inst_sram_rdata;
+            inst_remain_valid <= 1'b1;
+        end
+    end
+    else if(inst_remain_valid && ID_allowin) begin
+        inst_reg <= inst_remain_reg;
+        inst_remain_valid <= 1'b0;
     end
 end
 
@@ -862,9 +964,9 @@ assign alu_op[ 8] = inst_slli_w|inst_sll_w;
 assign alu_op[ 9] = inst_srli_w|inst_srl_w;
 assign alu_op[10] = inst_srai_w|inst_sra_w;
 assign alu_op[11] = inst_lu12i_w;
-assign alu_op[12] = inst_mul_w;
-assign alu_op[13] = inst_mulh_w;
-assign alu_op[14] = inst_mulh_wu;
+// assign alu_op[12] = inst_mul_w;
+// assign alu_op[13] = inst_mulh_w;
+// assign alu_op[14] = inst_mulh_wu;
 
 assign need_ui5   =  inst_slli_w | inst_srli_w | inst_srai_w;
 assign need_si12  =  inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
@@ -895,15 +997,15 @@ assign reg_MEM_hit = need_rj && (rj != 5'd0) && (rj == dest_MEM_ID) || need_rk &
 assign reg_WB_hit = need_rj && (rj != 5'd0) && (rj == dest_WB_ID) || need_rk && (rk != 5'd0) && (rk == dest_WB_ID) || need_rd && (rd != 5'd0) && (rd == dest_WB_ID);
 
 assign rj_pro = (rj == dest_EX_ID) ? EX_final_result :
-                (rj == dest_MEM_ID) ? data_sram_addr_MEM :
+                (rj == dest_MEM_ID) ? alu_result_MEM :
                 final_result ;
 
 assign rk_pro = (rk == dest_EX_ID) ? EX_final_result :
-                (rk == dest_MEM_ID) ? data_sram_addr_MEM :
+                (rk == dest_MEM_ID) ? alu_result_MEM :
                 final_result ;
 
 assign rd_pro = (rd == dest_EX_ID) ? EX_final_result :
-                (rd == dest_MEM_ID) ? data_sram_addr_MEM :
+                (rd == dest_MEM_ID) ? alu_result_MEM :
                 final_result ;
 
 assign hit_wait = reg_EX_hit && data_sram_req_EX || reg_MEM_hit && data_sram_req_MEM;
@@ -977,7 +1079,6 @@ assign rkd_value = src_reg_is_rd && rd_hit ? rd_pro :
 
 
 /******** 分支判断块 ********/
-wire inst_INVTLB_op;
 assign inst_INVTLB_op = (inst_INVTLB && (op_4_0==5'h0 || op_4_0==5'h1 || op_4_0==5'h2 || op_4_0==5'h3 || op_4_0==5'h4 || op_4_0==5'h5 || op_4_0==5'h6));
 assign rj_sign = {{rj_value[31] & ~inst_bltu & ~inst_bgeu}, rj_value};
 assign rd_sign = {{rkd_value[31] & ~inst_bltu & ~inst_bgeu}, rkd_value};
@@ -999,7 +1100,8 @@ assign br_taken_ID = (   inst_beq  &&  rj_eq_rd
 ) && ID_valid || exc_at_ID || has_int;
 assign br_taken_EX = exc_at_EX;
 // - 调整了一下br_target的优先级
-assign br_target =  (wb_ex) ? ex_entry :
+assign br_target =  (exc_tlbr_inst || exc_tlbr_data) ? csr_tlbrentry_rvalue :
+                    (wb_ex) ? ex_entry :
                     (inst_ertn) ? ex_epc :
                     (inst_jirl) ? (rj_value + jirl_offs) :
                     (pc_ID + br_offs);//branch
@@ -1051,7 +1153,10 @@ always @(posedge clk) begin
     if(reset) begin
         alu_src1_r <= 32'h0;
         alu_src2_r <= 32'h0;
-        alu_op_r   <= 15'h0;
+        alu_op_r   <= 12'h0;
+        mul_r      <= 1'b0;
+        mul_high_r <= 1'b0;
+        mul_hign_unsigned_r <= 1'b0;
         div_signed_r <= 1'b0;
         div_unsigned_r <= 1'b0;
         get_div_or_mod_r <= 1'b0;
@@ -1060,6 +1165,9 @@ always @(posedge clk) begin
         alu_src1_r <= alu_src1;
         alu_src2_r <= alu_src2;
         alu_op_r   <= alu_op;
+        mul_r      <= inst_mul_w;
+        mul_high_r <= inst_mulh_w;
+        mul_hign_unsigned_r <= inst_mulh_wu;
         div_signed_r <= div_signed;
         div_unsigned_r <= div_unsigned;
         get_div_or_mod_r <= get_div_or_mod;
@@ -1164,6 +1272,13 @@ always @(posedge clk) begin
 end
 /********除法器模块********/
 
+/********乘法器模块********/
+wire [32:0] mul_a, mul_b;
+wire [65:0] mul_result;
+assign mul_a = {alu_src1_r[31] && !mul_hign_unsigned_r, alu_src1_r};
+assign mul_b = {alu_src2_r[31] && !mul_hign_unsigned_r, alu_src2_r};
+assign mul_result = $signed(mul_a) * $signed(mul_b);
+/********乘法器模块********/
 
 //EX流水级
 /****************************************************************************/
@@ -1200,12 +1315,19 @@ div_gen_unsigned u_div_gen_unsigned(// 进行无符号除法运算
 
 assign EX_final_result =  div_signed_r ? (get_div_or_mod_r ? sdiv_result[63:32] : sdiv_result[31:0]):
                           div_unsigned_r ? (get_div_or_mod_r ? udiv_result[63:32] : udiv_result[31:0]):
+                          mul_r ? mul_result[31:0] :
+                          (mul_high_r || mul_hign_unsigned_r) ? mul_result[63:32] :
                           (is_csr_EX)?csr_rvalue_EX://csr指令直接从csr中取值
                           (is_rdcntid_EX)?counter_id:
                           (is_rdcntvl_EX)?counter_vl:
                           (is_rdcntvh_EX)?counter_vh:
                           alu_result;
-assign data_sram_addr_EX  = EX_final_result;//设计访存地址
+assign data_sram_addr_EX  = da ? alu_result :
+                            pg ? (
+                                dmw_hit1 ? {addr_pseg1, alu_result[28:0]}:
+                                (s1_ps == 12)? {s1_ppn[19:0], alu_result[11:0]}:
+                                {s1_ppn[19:9], alu_result[20:0]}
+                            ) : 32'b0;
 
 //将一些后续控制信号从EX传递下去
 always @(posedge clk) begin//访存控制
@@ -1216,6 +1338,7 @@ always @(posedge clk) begin//访存控制
         data_sram_type_tag_MEM <= 4'b0;
         data_sram_size_MEM <= 2'b0;
         data_sram_wr_MEM <= 1'b0;
+        alu_result_MEM <= 32'h0;
     end
     else if(MEM_allowin && EX_valid && EX_readygo) begin
         data_sram_req_MEM <= data_sram_req_EX;
@@ -1224,6 +1347,7 @@ always @(posedge clk) begin//访存控制
         data_sram_type_tag_MEM <= data_sram_type_tag_EX;
         data_sram_size_MEM <= data_sram_size_EX;
         data_sram_wr_MEM <= data_sram_wr_EX;
+        alu_result_MEM <= EX_final_result;
     end
 end
 always @(posedge clk) begin//寄存器控制
@@ -1283,7 +1407,7 @@ always @(posedge clk) begin
         data_sram_addroffset_WB <= 2'b0;
     end
     else if(WB_allowin && MEM_valid && MEM_readygo) begin
-        alu_result_WB <= data_sram_addr_MEM;
+        alu_result_WB <= alu_result_MEM;
         res_from_mem_WB <= res_from_mem_MEM;
         dest_WB <= dest_MEM;
         gr_we_WB <= gr_we_MEM;

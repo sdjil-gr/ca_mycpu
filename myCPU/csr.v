@@ -22,24 +22,38 @@ module csr
     input  wire [ 5:0] wb_ecode,
     input  wire [ 8:0] wb_esubcode,
     input  wire [31:0] wb_pc,
+    input  wire        wb_badv,
     input  wire [31:0] wb_vaddr,
+    input  wire        wb_tlbr,
+
     output wire [31:0] ex_entry,
     output wire [31:0] ex_epc,
     output wire        has_int,
     output wire [31:0] counter_id,
-    output wire [31:0] csr_tlbehi_rvalue,
+
     output wire [31:0] csr_tlbelo0_rvalue,
     output wire [31:0] csr_tlbelo1_rvalue,
     output wire [31:0] csr_tlbidx_rvalue,
-    output wire [31:0] csr_asid_rvalue,
-    output wire [31:0] csr_dmw0_rvalue,
-    output wire [31:0] csr_dmw1_rvalue,
     output wire [31:0] csr_estat_rvalue,
     output wire [31:0] csr_tlbrentry_rvalue,
+    output wire [18:0] tlbehi_vppn,
+    output wire [ 9:0] asid,
+    output wire [ 1:0] plv,
+    output wire        da,
+    output wire        pg,
+
+    input  wire [ 2:0] addr_vseg0,
+    input  wire [ 2:0] addr_vseg1,
+    output wire        dmw_hit0,
+    output wire        dmw_hit1,
+    output wire [ 2:0] addr_pseg0,
+    output wire [ 2:0] addr_pseg1,
+
     input  wire        inst_TLBSRCH_valid,
     input  wire        inst_TLBRD_valid,
     input  wire        inst_TLBWR_valid,
     input  wire        inst_TLBFILL_valid,
+
     input wire s1_found,
     input wire [$clog2(TLBNUM) - 1:0] s1_index,
     input  wire            r_e,
@@ -139,6 +153,9 @@ reg [25:0]csr_tlbrentry_pa;
 reg [31:0] timer_cnt;
 wire [31:0] tcfg_next_value;
 
+wire dmw_allow0;
+wire dmw_allow1;
+
 wire [31:0] csr_crmd_rvalue;
 wire [31:0] csr_prmd_rvalue;
 wire [31:0] csr_ecfg_rvalue;
@@ -150,13 +167,13 @@ wire [31:0] csr_tid_rvalue;
 wire [31:0] csr_tcfg_rvalue;
 wire [31:0] csr_tval_rvalue;
 wire [31:0] csr_ticlr_rvalue;
-// wire [31:0] csr_tlbehi_rvalue;
+wire [31:0] csr_dmw0_rvalue;
+wire [31:0] csr_dmw1_rvalue;
+wire [31:0] csr_asid_rvalue;
+wire [31:0] csr_tlbehi_rvalue;
 // wire [31:0] csr_tlbelo0_rvalue;
 // wire [31:0] csr_tlbelo1_rvalue;
 // wire [31:0] csr_tlbidx_rvalue;
-// wire [31:0] csr_asid_rvalue;
-// wire [31:0] csr_dmw0_rvalue;
-// wire [31:0] csr_dmw1_rvalue;
 
 
 assign csr_crmd_rvalue = {23'b0,csr_crmd_datm,csr_crmd_datf,csr_crmd_pg,csr_crmd_da,csr_crmd_ie,csr_crmd_plv};
@@ -179,6 +196,21 @@ assign csr_dmw0_rvalue = {csr_dmw0_vseg,1'b0,csr_dmw0_pseg,19'b0,csr_dmw0_mat,cs
 assign csr_dmw1_rvalue = {csr_dmw1_vseg,1'b0,csr_dmw1_pseg,19'b0,csr_dmw1_mat,csr_dmw1_plv3,2'b0,csr_dmw1_plv0};
 assign csr_tlbrentry_rvalue = {csr_tlbrentry_pa,6'b0};
 
+assign tlbehi_vppn = csr_tlbehi_vppn;
+assign asid = csr_asid_asid;
+assign plv = csr_crmd_plv;
+assign da = csr_crmd_da;
+assign pg = csr_crmd_pg;
+
+//DMW hit control
+assign dmw_allow0 = (csr_crmd_plv == 0) && csr_dmw0_plv0 || (csr_crmd_plv == 3) && csr_dmw0_plv3;
+assign dmw_allow1 = (csr_crmd_plv == 0) && csr_dmw1_plv0 || (csr_crmd_plv == 3) && csr_dmw1_plv3;
+assign dmw_hit0 = dmw_allow0 && (addr_vseg0 == csr_dmw0_vseg) || dmw_allow1 && (addr_vseg0 == csr_dmw1_vseg);
+assign dmw_hit1 = dmw_allow0 && (addr_vseg1 == csr_dmw0_vseg) || dmw_allow1 && (addr_vseg1 == csr_dmw1_vseg);
+assign addr_pseg0 = (addr_vseg0 == csr_dmw0_vseg) ? csr_dmw0_pseg :
+                    (addr_vseg0 == csr_dmw1_vseg) ? csr_dmw1_pseg : 3'b000;
+assign addr_pseg1 = (addr_vseg1 == csr_dmw0_vseg) ? csr_dmw0_pseg :
+                    (addr_vseg1 == csr_dmw1_vseg) ? csr_dmw1_pseg : 3'b000;
 
 assign csr_rvalue =     csr_num == `CSR_CRMD   ? csr_crmd_rvalue :
                         csr_num == `CSR_PRMD   ? csr_prmd_rvalue :
@@ -239,11 +271,33 @@ always @(posedge clk) begin
         csr_crmd_datf <= 2'b00;
         csr_crmd_datm <= 2'b00;
     end
+    else if(wb_tlbr) begin
+        csr_crmd_da <= 1'b1;
+        csr_crmd_pg <= 1'b0;
+    end
+    else if(ertn_flush && csr_estat_ecode == `ECODE_TLBR) begin
+        csr_crmd_da <= 1'b0;
+        csr_crmd_pg <= 1'b1;
+    end
+    else if(csr_we && csr_num == `CSR_CRMD) begin
+        csr_crmd_da <= csr_wmask[`CSR_CRMD_DA] & csr_wvalue[`CSR_CRMD_DA]
+                    |  ~csr_wmask[`CSR_CRMD_DA] & csr_crmd_da;
+        csr_crmd_pg <= csr_wmask[`CSR_CRMD_PG] & csr_wvalue[`CSR_CRMD_PG]
+                    |  ~csr_wmask[`CSR_CRMD_PG] & csr_crmd_pg;
+        csr_crmd_datf <= csr_wmask[`CSR_CRMD_DATF] & csr_wvalue[`CSR_CRMD_DATF]
+                    |  ~csr_wmask[`CSR_CRMD_DATF] & csr_crmd_datf;
+        csr_crmd_datm <= csr_wmask[`CSR_CRMD_DATM] & csr_wvalue[`CSR_CRMD_DATM]
+                    |  ~csr_wmask[`CSR_CRMD_DATM] & csr_crmd_datm;
+    end
 end
 
 //PRMD 的 PPLV 域以及 PIE 域
 always @(posedge clk) begin
-    if(wb_ex)begin
+    if(reset)begin
+        csr_prmd_pplv <= 2'b00;
+        csr_prmd_pie <= 1'b0;
+    end
+    else if(wb_ex)begin
         csr_prmd_pplv <= csr_crmd_plv;
         csr_prmd_pie <= csr_crmd_ie;
     end
@@ -278,7 +332,10 @@ always @(posedge clk) begin
     csr_estat_is[9:2] <= 8'b0;
     csr_estat_is[10] <= 1'b0;
     
-    if(timer_cnt == 32'b0) begin
+    if(reset) begin
+        csr_estat_is[11] <= 1'b0;
+    end
+    else if(timer_cnt == 32'b0) begin
         csr_estat_is[11] <= 1'b1;
     end
     else if(csr_we && csr_num==`CSR_TICLR && csr_wmask[`CSR_TICLR_CLR] && csr_wvalue[`CSR_TICLR_CLR]) begin
@@ -290,7 +347,11 @@ end
 
 //ESTAT 的 ECODE 域以及 ESUBCODE 域
 always @(posedge clk) begin
-    if(wb_ex)begin
+    if(reset) begin
+        csr_estat_ecode <= 6'b0;
+        csr_estat_esubcode <= 8'b0;
+    end
+    else if(wb_ex)begin
         csr_estat_ecode <= wb_ecode;
         csr_estat_esubcode <= wb_esubcode;
     end
@@ -308,10 +369,10 @@ always @(posedge clk) begin
 end
 
 //BADV 的 VADDR 域
+
 always @(posedge clk) begin
-    if(wb_ex && (wb_ecode==`ECODE_ADE || wb_ecode==`ECODE_ALE))begin
-        csr_badv_vaddr <= (wb_ecode==`ECODE_ADE && wb_esubcode==`ESUBCODE_ADEF) ? wb_pc :
-                           wb_vaddr;
+    if(wb_badv || wb_ecode==`ECODE_ADE || wb_ecode==`ECODE_ALE) begin
+        csr_badv_vaddr <= wb_vaddr;
     end
 end
 
@@ -496,6 +557,9 @@ always @(posedge clk) begin
     end
     else if(inst_TLBRD_valid && !r_e) begin
         csr_tlbehi_vppn <= 19'b0;
+    end
+    else if(wb_badv) begin
+        csr_tlbehi_vppn <= wb_vaddr[31:13];
     end
 end
 
