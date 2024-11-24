@@ -52,6 +52,7 @@ FINISH exp15 AT 2024/10/23
 
 FINISH exp16 AT 2024/10/23
 
+### 存储管理单元设计
 #### exp17
 - [x]  完成 TLB 设计
 
@@ -61,16 +62,20 @@ FINISH exp17 AT 2024/11/10
 - [x]  在 CPU 中增加 `TLBSRCH`、`TLBRD`、`TLBWR`、`TLBFILL`、`INVTLB` 指令;
 - [x]  在 CPU 中增加 `TLBIDX`、`TLBEHI`、`TLBELO0`、`TLBELO1`、`ASID`、`TLBRENTRY` 等 CSR 寄存器;
 
-## 任务
-
-### 存储管理单元设计
-
+FINISH exp18 AT 2024/11/15
 
 #### exp19
-- [ ]  为 CPU 增加 TLB 相关异常：TLB 重填例外、load/store/取指操作页无效例外、页修改例
+- [x]  为 CPU 增加 TLB 相关异常：TLB 重填例外、load/store/取指操作页无效例外、页修改例
 外、页特权等级不合规例外;
-- [ ]  在 CPU 中增加 DMW CSR 寄存器;
-- [ ]  为 CPU 增加虚实地址映射的功能;
+- [x]  在 CPU 中增加 DMW CSR 寄存器;
+- [x]  为 CPU 增加虚实地址映射的功能;
+
+FINISH exp19 AT 2024/11/23
+
+## 任务
+
+
+
 
 
 
