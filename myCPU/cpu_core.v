@@ -548,14 +548,14 @@ assign csr_wvalue = rkd_value;
 
 //异常判断
 assign exc_tlbr_inst = da ? 1'b0 : (!dmw_hit0 && !s0_found && IF_valid);
-assign exc_pif = da ? 1'b0 : (!s0_v && IF_valid);
+assign exc_pif = da ? 1'b0 : (!dmw_hit0 && !s0_v && IF_valid);
 assign exc_tlbr_data = da ? 1'b0 : (!dmw_hit1 && !s1_found && data_sram_req_EX && EX_valid);
-assign exc_pil = da ? 1'b0 : (!s1_v && !data_sram_wr_EX && data_sram_req_EX && EX_valid);
-assign exc_pis = da ? 1'b0 : (!s1_v &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
-assign exc_pme = da ? 1'b0 : (!s1_d &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
+assign exc_pil = da ? 1'b0 : (!dmw_hit1 && !s1_v && !data_sram_wr_EX && data_sram_req_EX && EX_valid);
+assign exc_pis = da ? 1'b0 : (!dmw_hit1 && !s1_v &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
+assign exc_pme = da ? 1'b0 : (!dmw_hit1 && !s1_d &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
 
-assign exc_ppi_inst = da ? 1'b0 : ((plv > s0_plv) && IF_valid);
-assign exc_ppi_data = da ? 1'b0 : ((plv > s1_plv) && data_sram_req_EX && EX_valid);
+assign exc_ppi_inst = da ? 1'b0 : (!dmw_hit0 && (plv > s0_plv) && IF_valid);
+assign exc_ppi_data = da ? 1'b0 : (!dmw_hit1 && (plv > s1_plv) && data_sram_req_EX && EX_valid);
 
 assign exc_adef = (pc[1:0] != 2'b00) && IF_valid;
 assign exc_ale  = (data_sram_type_tag_EX[2] && alu_result[0] != 1'b0

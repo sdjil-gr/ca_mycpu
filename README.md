@@ -72,11 +72,24 @@ FINISH exp18 AT 2024/11/15
 
 FINISH exp19 AT 2024/11/23
 
+### 高速缓存设计
+#### exp20
+- [x]  设计 Cache 模块;
+
+FINISH exp20 AT 2024/12/2
+
 ## 任务
 
 
+#### exp21
+- [x]  在 CPU 中集成 Cache 模块作为 iCache;
+- [x]  修改转接桥使其支持 burst 传输;
 
+#### exp22
+- [x]  在 CPU 中集成 Cache 模块作为 dCache;
 
+#### exp23
+- [x]  在 CPU 中添加 `CACOP` 指令;
 
 
 ## 其他
