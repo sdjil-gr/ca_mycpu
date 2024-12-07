@@ -31,6 +31,8 @@ module cache(
     output[127:0] wr_data,
     input         wr_rdy
 );
+reg         reset;
+always @(posedge clk) reset <= ~resetn;
 
 //主状态机
     parameter IDLE = 5'b10000;
@@ -94,7 +96,7 @@ module cache(
 
 //主状态机
    always @(posedge clk) begin
-        if(~resetn) begin
+        if(reset) begin
             state <= IDLE;
         end
         else begin
@@ -162,7 +164,7 @@ module cache(
 //write buffer 状态机
 
     always @(posedge clk) begin
-        if(~resetn) begin
+        if(reset) begin
             wb_state <= WB_IDLE;
         end
         else begin
@@ -190,7 +192,7 @@ module cache(
     end
 // request buffer
 always @(posedge clk) begin
-        if(~resetn)
+        if(reset)
             {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg} <= 70'b0;
         else if(valid & addr_ok)
             {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg}
@@ -199,7 +201,7 @@ always @(posedge clk) begin
 
 // write buffer
 always @(posedge clk) begin
-        if(~resetn)
+        if(reset)
             {wrbuf_way, wrbuf_index, wrbuf_offset, wrbuf_wstrb, wrbuf_wdata} <= 49'b0;
         else if(hit_write)
             {wrbuf_way, wrbuf_index, wrbuf_offset, wrbuf_wstrb, wrbuf_wdata}
@@ -208,7 +210,7 @@ always @(posedge clk) begin
     
 // burst data counter
 always @(posedge clk) begin
-        if(~resetn)
+        if(reset)
             ret_cnt <= 2'b0;
         else if(ret_valid) begin
             if(!ret_last)
@@ -238,7 +240,7 @@ always @(posedge clk) begin
     
 // 伪随机替换算法
 	always @ (posedge clk) begin
-		if (~resetn) begin
+		if (reset) begin
 				replace_way <= 256'b0;
 			end
 		else if ((state == LOOKUP) || (state == IDLE))begin
@@ -255,7 +257,7 @@ always @(posedge clk) begin
 
 // dirty array
     always @(posedge clk) begin
-        if(~resetn)
+        if(reset)
             {dirty_arr[1], dirty_arr[0]} <= {256'b0, 256'b0};
         else if(wb_state == WB_WRITE)
             dirty_arr[wrbuf_way][wrbuf_index] <= 1'b1;
