@@ -78,9 +78,6 @@ FINISH exp19 AT 2024/11/23
 
 FINISH exp20 AT 2024/12/2
 
-## 任务
-
-
 #### exp21
 - [x]  在 CPU 中集成 Cache 模块作为 iCache;
 - [x]  修改转接桥使其支持 burst 传输;
@@ -88,8 +85,12 @@ FINISH exp20 AT 2024/12/2
 #### exp22
 - [x]  在 CPU 中集成 Cache 模块作为 dCache;
 
+FINISH exp21,22 AT 2024/12/7
+
+## 任务
+
 #### exp23
-- [x]  在 CPU 中添加 `CACOP` 指令;
+- [ ]  在 CPU 中添加 `CACOP` 指令;
 
 
 ## 其他
