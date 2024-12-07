@@ -13,8 +13,8 @@ module cpu_core
     output wire [ 7:0] inst_index, //va[11:4]
     output wire [ 3:0] inst_offset, //va[3:0]
     output wire        inst_mat, //1:cacheable, 0:uncacheable
-    // input  wire [ 3:0] inst_wstrb,
-    // input  wire [31:0] inst_wdata,
+    // output  wire [ 3:0] inst_wstrb,
+    // output  wire [31:0] inst_wdata,
     input  wire        inst_addr_ok,
     input  wire        inst_data_ok,
     input  wire [31:0] inst_rdata,
@@ -25,8 +25,8 @@ module cpu_core
     output wire [ 7:0] data_index, //va[11:4]
     output wire [ 3:0] data_offset, //va[3:0]
     output wire        data_mat, //1:cacheable, 0:uncacheable
-    input  wire [ 3:0] data_wstrb,
-    input  wire [31:0] data_wdata,
+    output  wire [ 3:0] data_wstrb,
+    output  wire [31:0] data_wdata,
     input  wire        data_addr_ok,
     input  wire        data_data_ok,
     input  wire [31:0] data_rdata,
