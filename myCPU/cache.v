@@ -124,7 +124,7 @@ module cache(
                 else if (!dirty_arr[replace_way[index_reg]][index_reg]
                  || !tagv_rdata[replace_way[index_reg]][0])
                     next_state = REPLACE;
-                else if(~cache_hit)
+                else
                     next_state = MISS;
 
             MISS:
