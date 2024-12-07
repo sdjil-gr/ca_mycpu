@@ -1,0 +1,447 @@
+From 82404e2eae85da1c34d6ee59afbb34792e591153 Mon Sep 17 00:00:00 2001
+From: sdjil <26917049@qq.com>
+Date: Sat, 7 Dec 2024 22:09:17 +0800
+Subject: [PATCH 2/5] fix: change cpu interface to adapt cache
+
+---
+ myCPU/cpu_core.v | 228 +++++++++++++++++++++++++++--------------------
+ 1 file changed, 129 insertions(+), 99 deletions(-)
+
+diff --git a/myCPU/cpu_core.v b/myCPU/cpu_core.v
+index 890f488..72d89b0 100644
+--- a/myCPU/cpu_core.v
++++ b/myCPU/cpu_core.v
+@@ -6,24 +6,30 @@ module cpu_core
+ (
+     input  wire        clk,
+     input  wire        resetn,
+-    // inst sram interface
+-    output wire        inst_sram_req,
+-    output wire        inst_sram_wr,
+-    output wire [ 1:0] inst_sram_size,
+-    output wire [31:0] inst_sram_addr,
+-    output wire [31:0] inst_sram_wdata,
+-    input  wire [31:0] inst_sram_rdata,
+-    input  wire        inst_sram_addr_ok,
+-    input  wire        inst_sram_data_ok,
++    // icache interface
++    output wire        inst_valid,
++    output wire        inst_op,//1:write, 0:read
++    output wire [19:0] inst_tag, //pa[31:12]
++    output wire [ 7:0] inst_index, //va[11:4]
++    output wire [ 3:0] inst_offset, //va[3:0]
++    output wire        inst_mat, //1:cacheable, 0:uncacheable
++    // input  wire [ 3:0] inst_wstrb,
++    // input  wire [31:0] inst_wdata,
++    input  wire        inst_addr_ok,
++    input  wire        inst_data_ok,
++    input  wire [31:0] inst_rdata,
+     // data sram interface
+-    output wire        data_sram_req,
+-    output wire        data_sram_wr,
+-    output wire [ 1:0] data_sram_size,
+-    output wire [31:0] data_sram_addr,
+-    output wire [31:0] data_sram_wdata,
+-    input  wire [31:0] data_sram_rdata,
+-    input  wire        data_sram_addr_ok,
+-    input  wire        data_sram_data_ok,
++    output wire        data_valid,
++    output wire        data_op,//1:write, 0:read
++    output wire [19:0] data_tag, //pa[31:12]
++    output wire [ 7:0] data_index, //va[11:4]
++    output wire [ 3:0] data_offset, //va[3:0]
++    output wire        data_mat, //1:cacheable, 0:uncacheable
++    input  wire [ 3:0] data_wstrb,
++    input  wire [31:0] data_wdata,
++    input  wire        data_addr_ok,
++    input  wire        data_data_ok,
++    input  wire [31:0] data_rdata,
+     // trace debug interface
+     output wire [31:0] debug_wb_pc,
+     output wire [ 3:0] debug_wb_rf_we,
+@@ -235,6 +241,8 @@ wire [ 9:0] asid;
+ wire [ 1:0] plv;
+ wire        da;
+ wire        pg;
++wire        datf;
++wire        datm;
+ wire [31:0] csr_estat_rvalue;
+ wire [31:0] csr_tlbrentry_rvalue;
+ 
+@@ -244,6 +252,8 @@ wire        dmw_hit0;
+ wire        dmw_hit1;
+ wire [ 2:0] addr_pseg0;
+ wire [ 2:0] addr_pseg1;
++wire        dmw_mat0;
++wire        dmw_mat1;
+ 
+ // search port 0 (for fetch)
+ wire [ 18:0]    s0_vppn;
+@@ -341,14 +351,15 @@ wire [31:0] EX_final_result;
+ wire [31:0] final_result;
+ wire [31:0] mem_result;
+ 
+-wire        data_sram_req_ID;
+-wire        data_sram_wr_ID;
+-wire [1:0]  data_sram_size_ID;
+-wire [31:0] data_sram_addr_EX;
+-wire [ 1:0] data_sram_addroffset;
+-wire [31:0] data_sram_wdata_ID;
++wire        data_valid_ID;
++wire        data_op_ID;
++wire [31:0] data_addr_EX;
++wire [31:0] data_addr;
++wire [ 1:0] data_addroffset;
++wire [31:0] data_wdata_ID;
+ wire [ 3:0] data_sram_type_tag;
+-wire [31:0] data_sram_rdata_off;
++wire [31:0] data_rdata_off;
++wire        data_mat_EX;
+ 
+ //流水级间的寄存器
+ reg [31:0] pc_ID, pc_EX, pc_MEM, pc_WB;
+@@ -362,19 +373,18 @@ reg        need_div_r;
+ reg        div_unsigned_r;
+ reg        div_signed_r;
+ reg        get_div_or_mod_r;
+-reg        data_sram_req_EX;
+-reg        data_sram_req_MEM;
+-reg        data_sram_wr_EX;
+-reg        data_sram_wr_MEM;
+-reg [1:0]  data_sram_size_EX;
+-reg [1:0]  data_sram_size_MEM;
+-reg [31:0] data_sram_addr_MEM;
+-reg [31:0] data_sram_wdata_EX;
+-reg [31:0] data_sram_wdata_MEM;
++reg        data_valid_EX;
++reg        data_valid_MEM;
++reg        data_op_EX;
++reg        data_op_MEM;
++reg [31:0] data_addr_MEM;
++reg        data_mat_MEM;
++reg [31:0] data_wdata_EX;
++reg [31:0] data_wdata_MEM;
+ reg [ 3:0] data_sram_type_tag_EX;
+ reg [ 3:0] data_sram_type_tag_MEM;
+ reg [ 3:0] data_sram_type_tag_WB;
+-reg [ 1:0] data_sram_addroffset_WB;
++reg [ 1:0] data_addroffset_WB;
+ reg        res_from_mem_EX;
+ reg        res_from_mem_MEM;
+ reg        res_from_mem_WB;
+@@ -427,10 +437,10 @@ wire WB_readygo;
+ 
+ //握手信号处理
+ /****************************************************************************/
+-assign IF_readygo = (inst_addr_rcv && inst_sram_data_ok) || exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst;
++assign IF_readygo = (inst_addr_rcv && inst_data_ok) || exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst;
+ assign ID_readygo = valid_r ? (!hit_wait && !TLBSRCH_wait) : 1'b1;//访存前递阻塞
+ assign EX_readygo = !need_div_r;//阻塞除法
+-assign MEM_readygo = data_addr_rcv && data_sram_data_ok || !data_sram_req_MEM;
++assign MEM_readygo = data_addr_rcv && data_data_ok || !data_valid_MEM;
+ assign WB_readygo = 1'b1;
+ 
+ 
+@@ -549,13 +559,13 @@ assign csr_wvalue = rkd_value;
+ //异常判断
+ assign exc_tlbr_inst = da ? 1'b0 : (!dmw_hit0 && !s0_found && IF_valid);
+ assign exc_pif = da ? 1'b0 : (!dmw_hit0 && !s0_v && IF_valid);
+-assign exc_tlbr_data = da ? 1'b0 : (!dmw_hit1 && !s1_found && data_sram_req_EX && EX_valid);
+-assign exc_pil = da ? 1'b0 : (!dmw_hit1 && !s1_v && !data_sram_wr_EX && data_sram_req_EX && EX_valid);
+-assign exc_pis = da ? 1'b0 : (!dmw_hit1 && !s1_v &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
+-assign exc_pme = da ? 1'b0 : (!dmw_hit1 && !s1_d &&  data_sram_wr_EX && data_sram_req_EX && EX_valid);
++assign exc_tlbr_data = da ? 1'b0 : (!dmw_hit1 && !s1_found && data_valid_EX && EX_valid);
++assign exc_pil = da ? 1'b0 : (!dmw_hit1 && !s1_v && !data_op_EX && data_valid_EX && EX_valid);
++assign exc_pis = da ? 1'b0 : (!dmw_hit1 && !s1_v &&  data_op_EX && data_valid_EX && EX_valid);
++assign exc_pme = da ? 1'b0 : (!dmw_hit1 && !s1_d &&  data_op_EX && data_valid_EX && EX_valid);
+ 
+ assign exc_ppi_inst = da ? 1'b0 : (!dmw_hit0 && (plv > s0_plv) && IF_valid);
+-assign exc_ppi_data = da ? 1'b0 : (!dmw_hit1 && (plv > s1_plv) && data_sram_req_EX && EX_valid);
++assign exc_ppi_data = da ? 1'b0 : (!dmw_hit1 && (plv > s1_plv) && data_valid_EX && EX_valid);
+ 
+ assign exc_adef = (pc[1:0] != 2'b00) && IF_valid;
+ assign exc_ale  = (data_sram_type_tag_EX[2] && alu_result[0] != 1'b0
+@@ -651,6 +661,8 @@ csr u_csr(
+     .plv(plv),
+     .da(da),
+     .pg(pg),
++    .datf(datf),
++    .datm(datm),
+ 
+     .addr_vseg0(addr_vseg0),
+     .addr_vseg1(addr_vseg1),
+@@ -658,6 +670,8 @@ csr u_csr(
+     .dmw_hit1(dmw_hit1),
+     .addr_pseg0(addr_pseg0),
+     .addr_pseg1(addr_pseg1),
++    .dmw_mat0(dmw_mat0),
++    .dmw_mat1(dmw_mat1),
+ 
+     .inst_TLBSRCH_valid(inst_TLBSRCH_valid),
+     .inst_TLBRD_valid(inst_TLBRD_valid),
+@@ -754,16 +768,16 @@ assign invtlb_op = op_4_0;
+ 
+ // TLBSRCH 与 INVTLB 处于 ID 级，但是要与处于 EX 级的访存指令共用一个 TLB 查询端口，因此需要冲突时将 TLB相关指令延后一周期
+ 
+-assign TLBSRCH_wait = (inst_TLBSRCH || inst_INVTLB) && ID_valid && (data_sram_req_EX && EX_valid);
++assign TLBSRCH_wait = (inst_TLBSRCH || inst_INVTLB) && ID_valid && (data_valid_EX && EX_valid);
+ 
+ assign s0_vppn = pc[31:13];
+ assign s0_va_bit12 = pc[12];
+ assign s0_asid = asid;
+ 
+-assign s1_vppn = (data_sram_req_EX && EX_valid) ? alu_result[31:13] :
++assign s1_vppn = (data_valid_EX && EX_valid) ? alu_result[31:13] :
+                  inst_TLBSRCH ? tlbehi_vppn :
+                  inst_INVTLB  ? rf_rdata2[31:13] : 32'b0;
+-assign s1_va_bit12 = (data_sram_req_EX && EX_valid) ? alu_result[12] :
++assign s1_va_bit12 = (data_valid_EX && EX_valid) ? alu_result[12] :
+                      inst_TLBSRCH ? 1'b0 :
+                      inst_INVTLB  ? rf_rdata2[12] : 1'b0;
+ assign s1_asid = (inst_INVTLB) ?rf_rdata1[9:0] : asid;
+@@ -792,16 +806,18 @@ assign w_v1 = csr_tlbelo1_rvalue[0];
+ 
+ //IF流水级
+ /****************************************************************************/
+-assign inst_sram_req    = !inst_remain_valid && !inst_addr_rcv && ID_allowin && !exc_adef && !exc_tlbr_inst && !exc_pif && !exc_ppi_inst;//取值地址异常时不进行取指
+-assign inst_sram_wr     = 1'b0;
+-assign inst_sram_size   = 2'b10;
+-assign inst_sram_addr   = da ? pc :
+-                          pg ? (
+-                            dmw_hit0 ? {addr_pseg0, pc[28:0]}:
+-                            (s0_ps == 12)? {s0_ppn[19:0], pc[11:0]}:
+-                            {s0_ppn[19:9], pc[20:0]}
+-                          ) : 32'b0;
+-assign inst_sram_wdata  = 32'b0;
++assign inst_valid = !inst_remain_valid && !inst_addr_rcv && ID_allowin && !exc_adef && !exc_tlbr_inst && !exc_pif && !exc_ppi_inst;//取值地址异常时不进行取指
++assign inst_op = 1'b0;
++wire [31:0] inst_pa =  pg ? (
++                    dmw_hit0 ? {addr_pseg0, pc[28:0]}:
++                    (s0_ps == 12)? {s0_ppn[19:0], pc[11:0]}:
++                    {s0_ppn[19:9], pc[20:0]}
++                ) : pc;
++assign inst_tag = inst_pa[31:12];
++assign inst_index = pc[11:4];
++assign inst_offset = pc[3:0];
++assign inst_mat = pg ? (dmw_hit0 ? dmw_mat0 : s0_mat) : datf;
++
+ assign inst = inst_reg;
+ 
+ always @(posedge clk) begin
+@@ -810,11 +826,11 @@ always @(posedge clk) begin
+         inst_remain_reg <= 32'h0;
+         inst_remain_valid <= 1'b0;
+     end
+-    else if(inst_addr_rcv && inst_sram_data_ok)begin
++    else if(inst_addr_rcv && inst_data_ok)begin
+         if(ID_allowin)
+-            inst_reg <= inst_sram_rdata;
++            inst_reg <= inst_rdata;
+         else begin
+-            inst_remain_reg <= inst_sram_rdata;
++            inst_remain_reg <= inst_rdata;
+             inst_remain_valid <= 1'b1;
+         end
+     end
+@@ -831,7 +847,7 @@ always @(posedge clk) begin
+     else if(IF_readygo) begin
+         inst_addr_rcv <= 1'b0;
+     end
+-    else if(inst_sram_addr_ok && inst_sram_req) begin
++    else if(inst_addr_ok && inst_valid) begin
+         inst_addr_rcv <= 1'b1;
+     end
+ end
+@@ -1008,7 +1024,7 @@ assign rd_pro = (rd == dest_EX_ID) ? EX_final_result :
+                 (rd == dest_MEM_ID) ? alu_result_MEM :
+                 final_result ;
+ 
+-assign hit_wait = reg_EX_hit && data_sram_req_EX || reg_MEM_hit && data_sram_req_MEM;
++assign hit_wait = reg_EX_hit && data_valid_EX || reg_MEM_hit && data_valid_MEM;
+ /******** 前递块 ********/
+ 
+ 
+@@ -1140,13 +1156,12 @@ assign div_signed = inst_div_w | inst_mod_w;
+ assign div_unsigned = inst_div_wu | inst_mod_wu;
+ assign get_div_or_mod = inst_div_w | inst_div_wu;
+ 
+-assign data_sram_req_ID    = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w;
+-assign data_sram_wr_ID   = inst_st_b | inst_st_h | inst_st_w;
+-assign data_sram_size_ID = (inst_ld_b | inst_ld_bu | inst_st_b )?2'b00:(inst_ld_h | inst_ld_hu | inst_st_h)?2'b01:2'b10;
+-assign data_sram_wdata_ID = inst_st_b ? {4{rkd_value[ 7:0]}} :
++assign data_valid_ID    = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w;
++assign data_op_ID   = inst_st_b | inst_st_h | inst_st_w;
++assign data_wdata_ID = inst_st_b ? {4{rkd_value[ 7:0]}} :
+                             inst_st_h ? {2{rkd_value[15:0]}} :
+                             rkd_value;
+-assign data_sram_type_tag = {{inst_ld_b | inst_ld_bu | inst_st_b}, {inst_ld_h | inst_ld_hu | inst_st_h}, {inst_st_w | inst_ld_w}, {inst_ld_bu | inst_ld_hu}};// {byte_en, half_en, unsigned_en}
++assign data_sram_type_tag = {{inst_ld_b | inst_ld_bu | inst_st_b}, {inst_ld_h | inst_ld_hu | inst_st_h}, {inst_st_w | inst_ld_w}, {inst_ld_bu | inst_ld_hu}};// {byte_en, half_en, word_en, unsigned_en}
+ 
+ //将alu及除法器输入保存到EX阶段并使用
+ always @(posedge clk) begin
+@@ -1204,18 +1219,16 @@ always @(posedge clk) begin //寄存器控制
+ end
+ always @(posedge clk) begin //访存控制
+     if(reset) begin
+-        data_sram_req_EX <= 1'b0;
+-        data_sram_wdata_EX <= 32'h0;
++        data_valid_EX <= 1'b0;
++        data_wdata_EX <= 32'h0;
+         data_sram_type_tag_EX <= 4'b0;
+-        data_sram_size_EX <= 2'b0;
+-        data_sram_wr_EX <= 1'b0;
++        data_op_EX <= 1'b0;
+     end
+     else if(ID_valid && EX_allowin && ID_readygo) begin
+-        data_sram_req_EX <= data_sram_req_ID;
+-        data_sram_wdata_EX <= data_sram_wdata_ID;
++        data_valid_EX <= data_valid_ID;
++        data_wdata_EX <= data_wdata_ID;
+         data_sram_type_tag_EX <= data_sram_type_tag;
+-        data_sram_size_EX <= data_sram_size_ID;
+-        data_sram_wr_EX <= data_sram_wr_ID;
++        data_op_EX <= data_op_ID;
+     end
+ end
+ /****************************************************************************/
+@@ -1225,7 +1238,7 @@ end
+ 
+ // alu_src1_r, alu_src2_r, alu_op_r      alu相关信号
+ // res_from_mem_EX, dest_EX, gr_we_EX      寄存器相关信号
+-// data_sram_req_EX, data_sram_wdata_EX      访存相关信号
++// data_valid_EX, data_wdata_EX      访存相关信号
+ // sdiv_sor_valid, sdiv_dend_valid, need_div_r      除法器相关信号
+ // PC_EX
+ 
+@@ -1322,31 +1335,33 @@ assign EX_final_result =  div_signed_r ? (get_div_or_mod_r ? sdiv_result[63:32]
+                           (is_rdcntvl_EX)?counter_vl:
+                           (is_rdcntvh_EX)?counter_vh:
+                           alu_result;
+-assign data_sram_addr_EX  = da ? alu_result :
++assign data_addr_EX  = da ? alu_result :
+                             pg ? (
+                                 dmw_hit1 ? {addr_pseg1, alu_result[28:0]}:
+                                 (s1_ps == 12)? {s1_ppn[19:0], alu_result[11:0]}:
+                                 {s1_ppn[19:9], alu_result[20:0]}
+                             ) : 32'b0;
+ 
++assign data_mat_EX = pg ? (dmw_hit1 ? dmw_mat1 : s1_mat) : datm;
++
+ //将一些后续控制信号从EX传递下去
+ always @(posedge clk) begin//访存控制
+     if(reset) begin
+-        data_sram_req_MEM <= 1'b0;
+-        data_sram_addr_MEM <= 32'h0;
+-        data_sram_wdata_MEM <= 32'h0;
++        data_valid_MEM <= 1'b0;
++        data_addr_MEM <= 32'h0;
++        data_wdata_MEM <= 32'h0;
+         data_sram_type_tag_MEM <= 4'b0;
+-        data_sram_size_MEM <= 2'b0;
+-        data_sram_wr_MEM <= 1'b0;
++        data_op_MEM <= 1'b0;
++        data_mat_MEM <= 1'b0;
+         alu_result_MEM <= 32'h0;
+     end
+     else if(MEM_allowin && EX_valid && EX_readygo) begin
+-        data_sram_req_MEM <= data_sram_req_EX;
+-        data_sram_addr_MEM <= data_sram_addr_EX;
+-        data_sram_wdata_MEM <= data_sram_wdata_EX;
++        data_valid_MEM <= data_valid_EX;
++        data_addr_MEM <= data_addr_EX;
++        data_wdata_MEM <= data_wdata_EX;
+         data_sram_type_tag_MEM <= data_sram_type_tag_EX;
+-        data_sram_size_MEM <= data_sram_size_EX;
+-        data_sram_wr_MEM <= data_sram_wr_EX;
++        data_op_MEM <= data_op_EX;
++        data_mat_MEM <= data_mat_EX;
+         alu_result_MEM <= EX_final_result;
+     end
+ end
+@@ -1368,7 +1383,7 @@ end
+ 
+ //EX --> MEM
+ 
+-// data_sram_req_MEM, data_sram_addr_MEM, data_sram_wdata_MEM, data_sram_type_tag_MEM      访存相关信号
++// data_valid_MEM, data_addr_MEM, data_wdata_MEM, data_sram_type_tag_MEM      访存相关信号
+ // res_from_mem_MEM, dest_MEM, gr_we_MEM      寄存器相关信号
+ // PC_MEM
+ 
+@@ -1377,12 +1392,18 @@ end
+ //MEM流水级
+ /****************************************************************************/
+ //设置访存信号
+-assign data_sram_req = !data_addr_rcv && data_sram_req_MEM && MEM_valid ;
+-assign data_sram_wr = data_sram_wr_MEM && MEM_valid ; // - 小补丁，防止后续埋雷
+-assign data_sram_size = data_sram_size_MEM ;
+-assign data_sram_addr = data_sram_addr_MEM;
+-assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
+-assign data_sram_wdata = data_sram_wdata_MEM;
++assign data_valid = !data_addr_rcv && data_valid_MEM && MEM_valid ;
++assign data_op = data_op_MEM && MEM_valid ; // - 小补丁，防止后续埋雷
++assign data_addr = data_addr_MEM;
++assign data_tag = data_addr[31:12];
++assign data_index = data_addr[11:4];
++assign data_offset = data_addr[3:0];
++assign data_mat = data_mat_MEM;
++
++assign data_addroffset = data_addr[1:0];//访存偏移
++
++assign data_wstrb = {data_sram_type_tag_MEM[1], data_sram_type_tag_MEM[1], data_sram_type_tag_MEM[1] || data_sram_type_tag_MEM[2], 1'b1} << data_addroffset;
++assign data_wdata = data_wdata_MEM;
+ 
+ always @(posedge clk) begin
+     if (reset) begin
+@@ -1391,7 +1412,7 @@ always @(posedge clk) begin
+     else if(MEM_readygo) begin
+         data_addr_rcv <= 1'b0;
+     end
+-    else if(data_sram_addr_ok&&data_sram_req) begin
++    else if(data_addr_ok && data_valid) begin
+         data_addr_rcv <= 1'b1;
+     end
+ end
+@@ -1404,7 +1425,7 @@ always @(posedge clk) begin
+         dest_WB <= 5'd0;
+         gr_we_WB <= 1'b0;
+         data_sram_type_tag_WB <= 4'b0;
+-        data_sram_addroffset_WB <= 2'b0;
++        data_addroffset_WB <= 2'b0;
+     end
+     else if(WB_allowin && MEM_valid && MEM_readygo) begin
+         alu_result_WB <= alu_result_MEM;
+@@ -1412,16 +1433,25 @@ always @(posedge clk) begin
+         dest_WB <= dest_MEM;
+         gr_we_WB <= gr_we_MEM;
+         data_sram_type_tag_WB <= data_sram_type_tag_MEM;
+-        data_sram_addroffset_WB <= data_sram_addroffset;
++        data_addroffset_WB <= data_addroffset;
+     end
+ end
+ 
+-assign data_sram_rdata_off = data_sram_rdata >> (data_sram_addroffset_WB * 8);
+-assign mem_result   = data_sram_type_tag_WB[3]? {{24{data_sram_rdata_off[7] & ~data_sram_type_tag_WB[0]}}, data_sram_rdata_off[7:0]} :
+-                      data_sram_type_tag_WB[2]? {{16{data_sram_rdata_off[15] & ~data_sram_type_tag_WB[0]}}, data_sram_rdata_off[15:0]} :
+-                      data_sram_rdata_off;
+-/****************************************************************************/
++reg [31:0] data_rdata_reg;
++always @(posedge clk) begin
++    if(reset) begin
++        data_rdata_reg <= 32'h0;
++    end
++    else if(MEM_readygo) begin
++        data_rdata_reg <= data_rdata;
++    end
++end
+ 
++assign data_rdata_off = data_rdata_reg >> (data_addroffset_WB * 8);
++assign mem_result   = data_sram_type_tag_WB[3]? {{24{data_rdata_off[7] & ~data_sram_type_tag_WB[0]}}, data_rdata_off[7:0]} :
++                      data_sram_type_tag_WB[2]? {{16{data_rdata_off[15] & ~data_sram_type_tag_WB[0]}}, data_rdata_off[15:0]} :
++                      data_rdata_off;
++/****************************************************************************/
+ 
+ 
+ //MEM --> WB
+-- 
+2.47.0.windows.2
+

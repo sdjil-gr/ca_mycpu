@@ -1,0 +1,103 @@
+From 0752066dfa0ee6f240d1f6065e8a3ea5f831b2ed Mon Sep 17 00:00:00 2001
+From: sdjil <26917049@qq.com>
+Date: Sat, 7 Dec 2024 22:11:29 +0800
+Subject: [PATCH 4/5] take out signals related to the type of storage access
+ from the CSR
+
+---
+ myCPU/csr.v | 40 +++++++++++++++++++++++++++++++++-------
+ 1 file changed, 33 insertions(+), 7 deletions(-)
+
+diff --git a/myCPU/csr.v b/myCPU/csr.v
+index d2af2a0..8bf1b8a 100644
+--- a/myCPU/csr.v
++++ b/myCPU/csr.v
+@@ -41,6 +41,8 @@ module csr
+     output wire [ 1:0] plv,
+     output wire        da,
+     output wire        pg,
++    output wire        datf,
++    output wire        datm,
+ 
+     input  wire [ 2:0] addr_vseg0,
+     input  wire [ 2:0] addr_vseg1,
+@@ -48,6 +50,8 @@ module csr
+     output wire        dmw_hit1,
+     output wire [ 2:0] addr_pseg0,
+     output wire [ 2:0] addr_pseg1,
++    output wire        dmw_mat0,
++    output wire        dmw_mat1,
+ 
+     input  wire        inst_TLBSRCH_valid,
+     input  wire        inst_TLBRD_valid,
+@@ -201,6 +205,9 @@ assign asid = csr_asid_asid;
+ assign plv = csr_crmd_plv;
+ assign da = csr_crmd_da;
+ assign pg = csr_crmd_pg;
++// - 外接直接地址映射模式下的存储访问类型
++assign datf = csr_crmd_datf[0];
++assign datm = csr_crmd_datm[0];
+ 
+ //DMW hit control
+ assign dmw_allow0 = (csr_crmd_plv == 0) && csr_dmw0_plv0 || (csr_crmd_plv == 3) && csr_dmw0_plv3;
+@@ -211,6 +218,11 @@ assign addr_pseg0 = (addr_vseg0 == csr_dmw0_vseg) ? csr_dmw0_pseg :
+                     (addr_vseg0 == csr_dmw1_vseg) ? csr_dmw1_pseg : 3'b000;
+ assign addr_pseg1 = (addr_vseg1 == csr_dmw0_vseg) ? csr_dmw0_pseg :
+                     (addr_vseg1 == csr_dmw1_vseg) ? csr_dmw1_pseg : 3'b000;
++// - 外接窗口映射模式下的存储访问类型
++assign dmw_mat0 = (addr_vseg0 == csr_dmw0_vseg) ? csr_dmw0_mat :
++                   (addr_vseg0 == csr_dmw1_vseg) ? csr_dmw1_mat : 2'b00;
++assign dmw_mat1 = (addr_vseg1 == csr_dmw0_vseg) ? csr_dmw0_mat :
++                   (addr_vseg1 == csr_dmw1_vseg) ? csr_dmw1_mat : 2'b00;
+ 
+ assign csr_rvalue =     csr_num == `CSR_CRMD   ? csr_crmd_rvalue :
+                         csr_num == `CSR_PRMD   ? csr_prmd_rvalue :
+@@ -263,13 +275,11 @@ always @(posedge clk) begin
+     end
+ end
+ 
+-//CRMD 的DA、PG、DATF、DATM 域
++//CRMD 的DA、PG 域
+ always @(posedge clk) begin
+     if (reset) begin
+         csr_crmd_da <= 1'b1;
+         csr_crmd_pg <= 1'b0;
+-        csr_crmd_datf <= 2'b00;
+-        csr_crmd_datm <= 2'b00;
+     end
+     else if(wb_tlbr) begin
+         csr_crmd_da <= 1'b1;
+@@ -284,10 +294,26 @@ always @(posedge clk) begin
+                     |  ~csr_wmask[`CSR_CRMD_DA] & csr_crmd_da;
+         csr_crmd_pg <= csr_wmask[`CSR_CRMD_PG] & csr_wvalue[`CSR_CRMD_PG]
+                     |  ~csr_wmask[`CSR_CRMD_PG] & csr_crmd_pg;
+-        csr_crmd_datf <= csr_wmask[`CSR_CRMD_DATF] & csr_wvalue[`CSR_CRMD_DATF]
+-                    |  ~csr_wmask[`CSR_CRMD_DATF] & csr_crmd_datf;
+-        csr_crmd_datm <= csr_wmask[`CSR_CRMD_DATM] & csr_wvalue[`CSR_CRMD_DATM]
+-                    |  ~csr_wmask[`CSR_CRMD_DATM] & csr_crmd_datm;
++    end
++end
++
++// CRMD 的 DATF、DATM 域
++always @(posedge clk) begin
++    if(reset) begin
++        csr_crmd_datf <= 2'b00;
++        csr_crmd_datm <= 2'b00;
++    end
++    else if(csr_we && csr_num==`CSR_CRMD) begin// ! 指令手册上说，当 PG 域被软件置位 1 时，推荐 DATF、DATM 域被置位为 2'b01，但实际这样做时，会在测试中 crmd 寄存器值的检测失败。
++        // if(csr_wmask[`CSR_CRMD_PG] && csr_wvalue[`CSR_CRMD_PG]) begin
++        //     csr_crmd_datf <= 2'b01;
++        //     csr_crmd_datm <= 2'b01;
++        // end
++        // else begin
++            csr_crmd_datf <= csr_wmask[`CSR_CRMD_DATF] & csr_wvalue[`CSR_CRMD_DATF]
++                        |  ~csr_wmask[`CSR_CRMD_DATF] & csr_crmd_datf;
++            csr_crmd_datm <= csr_wmask[`CSR_CRMD_DATM] & csr_wvalue[`CSR_CRMD_DATM]
++                        |  ~csr_wmask[`CSR_CRMD_DATM] & csr_crmd_datm;
++        // end
+     end
+ end
+ 
+-- 
+2.47.0.windows.2
+

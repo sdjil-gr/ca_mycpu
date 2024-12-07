@@ -1,3 +1,4 @@
 project/
 xilinx_ip/
 !*.xci
+oldv
