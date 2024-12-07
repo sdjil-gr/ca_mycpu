@@ -1,0 +1,25 @@
+From 8717d70852a468431b55b62c4059945d0366cdda Mon Sep 17 00:00:00 2001
+From: sdjil <26917049@qq.com>
+Date: Sat, 7 Dec 2024 23:11:04 +0800
+Subject: [PATCH] fix(cache): fix a inferring latch issue
+
+---
+ myCPU/cache.v | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/myCPU/cache.v b/myCPU/cache.v
+index 644228d..d68d6de 100644
+--- a/myCPU/cache.v
++++ b/myCPU/cache.v
+@@ -124,7 +124,7 @@ module cache(
+                 else if (!dirty_arr[replace_way[index_reg]][index_reg]
+                  || !tagv_rdata[replace_way[index_reg]][0])
+                     next_state = REPLACE;
+-                else if(~cache_hit)
++                else
+                     next_state = MISS;
+ 
+             MISS:
+-- 
+2.47.0.windows.2
+

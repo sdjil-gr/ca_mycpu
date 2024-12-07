@@ -1,0 +1,38 @@
+From fa387284cd0829f2552f09b785831faef846458f Mon Sep 17 00:00:00 2001
+From: sdjil <26917049@qq.com>
+Date: Sat, 7 Dec 2024 23:03:39 +0800
+Subject: [PATCH] fix(cpu_core): fix a multi-driver issue
+
+---
+ myCPU/cpu_core.v | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/myCPU/cpu_core.v b/myCPU/cpu_core.v
+index 72d89b0..26b490c 100644
+--- a/myCPU/cpu_core.v
++++ b/myCPU/cpu_core.v
+@@ -13,8 +13,8 @@ module cpu_core
+     output wire [ 7:0] inst_index, //va[11:4]
+     output wire [ 3:0] inst_offset, //va[3:0]
+     output wire        inst_mat, //1:cacheable, 0:uncacheable
+-    // input  wire [ 3:0] inst_wstrb,
+-    // input  wire [31:0] inst_wdata,
++    // output  wire [ 3:0] inst_wstrb,
++    // output  wire [31:0] inst_wdata,
+     input  wire        inst_addr_ok,
+     input  wire        inst_data_ok,
+     input  wire [31:0] inst_rdata,
+@@ -25,8 +25,8 @@ module cpu_core
+     output wire [ 7:0] data_index, //va[11:4]
+     output wire [ 3:0] data_offset, //va[3:0]
+     output wire        data_mat, //1:cacheable, 0:uncacheable
+-    input  wire [ 3:0] data_wstrb,
+-    input  wire [31:0] data_wdata,
++    output  wire [ 3:0] data_wstrb,
++    output  wire [31:0] data_wdata,
+     input  wire        data_addr_ok,
+     input  wire        data_data_ok,
+     input  wire [31:0] data_rdata,
+-- 
+2.47.0.windows.2
+
