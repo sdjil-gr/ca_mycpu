@@ -444,8 +444,9 @@ wire WB_readygo;
 /****************************************************************************/
 assign IF_readygo = (inst_addr_rcv && inst_data_ok) || exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst;
 assign ID_readygo = valid_r ? (!hit_wait && !TLBSRCH_wait) : 1'b1;//访存前递阻塞
-assign EX_readygo = !need_div_r &&  !(inst_CACOP_EX && code_EX[2:0]==0 && !inst_CACOP_recv) && !(inst_CACOP_EX && code_EX[2:0]==1 && !inst_data_ok);//阻塞除法
-assign MEM_readygo = data_addr_rcv && data_data_ok || !data_valid_MEM;
+assign EX_readygo = !need_div_r ;//阻塞除法
+assign MEM_readygo = (data_addr_rcv && data_data_ok || !data_valid_MEM)&& 
+ !(inst_CACOP_MEM && code_MEM[2:0]==0 && !inst_CACOP_recv) && !(inst_CACOP_MEM && code_MEM[2:0]==1 && !inst_data_ok);
 assign WB_readygo = 1'b1;
 
 
@@ -606,7 +607,7 @@ assign wb_ex = exc_at_ID || exc_at_EX || has_int;
 assign wb_pc =  (exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst) ? pc :
                 (exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data ||exc_pil_CACOP || exc_tlbr_data_CACOP || exc_ppi_data_CACOP)  ? pc_EX :
                 pc_ID;
-assign wb_vaddr = (exc_tlbr_data_CACOP || exc_pil_CACOP || exc_ppi_data_CACOP) ? CACOP_VPPN_EX :
+assign wb_vaddr = (exc_tlbr_data_CACOP || exc_pil_CACOP || exc_ppi_data_CACOP) ? alu_result :
                 (exc_adef || exc_tlbr_inst || exc_pif || exc_ppi_inst) ? pc :
                 (exc_ale || exc_tlbr_data || exc_pil || exc_pis || exc_pme || exc_ppi_data) ? alu_result :
                 pc_ID;
@@ -635,7 +636,7 @@ assign inst_TLBWR_valid = inst_TLBWR && ID_valid;
 assign inst_TLBFILL_valid = inst_TLBFILL && ID_valid;
 
 assign addr_vseg0 = pc[31:29];
-assign addr_vseg1 = (inst_CACOP_EX && EX_valid && code_EX[4:3]==2)?CACOP_VPPN[31:29]:alu_result[31:29];
+assign addr_vseg1 = alu_result[31:29];
 
 csr u_csr(
     .clk(clk),
@@ -785,11 +786,11 @@ assign s0_vppn = pc[31:13];
 assign s0_va_bit12 = pc[12];
 assign s0_asid = asid;
 
-assign s1_vppn = (inst_CACOP_EX && EX_valid &&code_EX[4:3]==2) ? CACOP_VPPN_EX[31:13] :
+assign s1_vppn = (inst_CACOP_EX && EX_valid &&code_EX[4:3]==2) ? alu_result[31:13] :
 (data_valid_EX && EX_valid) ? alu_result[31:13] :
                  inst_TLBSRCH ? tlbehi_vppn :
                  inst_INVTLB  ? rkd_value[31:13] : 32'b0;
-assign s1_va_bit12 = (inst_CACOP_EX && EX_valid &&code_EX[4:3]==2) ? CACOP_VPPN_EX[12] :
+assign s1_va_bit12 = (inst_CACOP_EX && EX_valid &&code_EX[4:3]==2) ? alu_result[12] :
 (data_valid_EX && EX_valid) ? alu_result[12] :
                      inst_TLBSRCH ? 1'b0 :
                      inst_INVTLB  ? rkd_value[12] : 1'b0;
@@ -819,7 +820,8 @@ assign w_v1 = csr_tlbelo1_rvalue[0];
 
 //IF流水级
 /****************************************************************************/
-assign inst_valid = (!inst_remain_valid && !inst_addr_rcv && ID_allowin && !exc_adef && !exc_tlbr_inst && !exc_pif && !exc_ppi_inst) || (inst_CACOP_EX && EX_valid && !exc_tlbr_data_CACOP && !exc_pil_CACOP && !exc_ppi_data_CACOP);//取值地址异常时不进行取指
+assign inst_valid = (!inst_remain_valid && !inst_addr_rcv && ID_allowin && !exc_adef && !exc_tlbr_inst && !exc_pif && !exc_ppi_inst) ||
+ (inst_CACOP_MEM && MEM_valid && !exc_tlbr_data_CACOP && !exc_pil_CACOP && !exc_ppi_data_CACOP);//取值地址异常时不进行取指
 assign inst_op = 1'b0;
 wire [31:0] inst_pa =  pg ? (
                     dmw_hit0 ? {addr_pseg0, pc[28:0]}:
@@ -827,18 +829,18 @@ wire [31:0] inst_pa =  pg ? (
                     {s0_ppn[19:9], pc[20:0]}
                 ) : pc;
 wire [31:0] inst_pa_CACOP =  pg ? (
-                    dmw_hit1 ? {addr_pseg1, CACOP_VPPN_EX[28:0]}:
-                    (s1_ps == 12)? {s1_ppn[19:0], CACOP_VPPN_EX[11:0]}:
-                    {s1_ppn[19:9], CACOP_VPPN_EX[20:0]}
-                ) : CACOP_VPPN_EX;
+                    dmw_hit1 ? {addr_pseg1, alu_result[28:0]}:
+                    (s1_ps == 12)? {s1_ppn[19:0], alu_result[11:0]}:
+                    {s1_ppn[19:9], alu_result[20:0]}
+                ) : alu_result;
 wire [31:0] data_pa_CACOP =  pg ? (
-                    dmw_hit1 ? {addr_pseg1, CACOP_VPPN_EX[28:0]}:
-                    (s1_ps == 12)? {s1_ppn[19:0], CACOP_VPPN_EX[11:0]}:
-                    {s1_ppn[19:9], CACOP_VPPN_EX[20:0]}
-                ) : CACOP_VPPN_EX;
-assign inst_tag =(inst_CACOP_EX&&EX_valid)?inst_pa_CACOP[31:12] : inst_pa[31:12];
-assign inst_index = (inst_CACOP_EX&&EX_valid)?CACOP_VPPN_EX[11:4] :pc[11:4];
-assign inst_offset =(inst_CACOP_EX&&EX_valid)?CACOP_VPPN_EX[3:0] : pc[3:0];
+                    dmw_hit1 ? {addr_pseg1, alu_result[28:0]}:
+                    (s1_ps == 12)? {s1_ppn[19:0], alu_result[11:0]}:
+                    {s1_ppn[19:9], alu_result[20:0]}
+                ) : alu_result;
+assign inst_tag =(inst_CACOP_MEM&&MEM_valid)?data_pa_CACOP_MEM[31:12] : inst_pa[31:12];
+assign inst_index = (inst_CACOP_MEM&&MEM_valid)?CACOP_VPPN_MEM[11:4] :pc[11:4];
+assign inst_offset =(inst_CACOP_MEM&&MEM_valid)?CACOP_VPPN_MEM[3:0] : pc[3:0];
 assign inst_mat = pg ? (dmw_hit0 ? dmw_mat0 : s0_mat) : datf;
 
 assign inst = inst_reg;
@@ -873,10 +875,10 @@ always @(posedge clk) begin
         inst_addr_rcv <= 1'b0;
         inst_CACOP_recv <= 1'b0;
     end
-    else if(inst_addr_ok && inst_valid && !(inst_CACOP_EX && EX_valid)) begin
+    else if(inst_addr_ok && inst_valid && !(inst_CACOP_MEM && MEM_valid)) begin
         inst_addr_rcv <= 1'b1;
     end
-    else if(inst_addr_ok && inst_valid &&  inst_CACOP_EX && EX_valid) begin
+    else if(inst_addr_ok && inst_valid &&  inst_CACOP_MEM && MEM_valid) begin
         inst_CACOP_recv <= 1'b1;
     end
 
@@ -997,12 +999,12 @@ assign inst_TLBFILL = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & 
 assign inst_INVTLB  = op_31_26_d[6'h01] & op_25_22_d[4'h9] & op_21_20_d[2'h0] & op_19_15_d[5'h13];
 //新添加CACOP指令有效信号
 assign inst_CACOP1   = op_31_26_d[6'h01] & op_25_22_d[4'h8];
-assign inst_CACOP    =inst_CACOP_EX&&EX_valid;
-assign code = code_EX;
-assign CACOP_VPPN =rj_value+{{20{i12[11]}}, i12[11:0]};
+assign inst_CACOP    =inst_CACOP_MEM&&MEM_valid;
+assign code = code_MEM;
+assign CACOP_VPPN =0;
 
 assign alu_op[ 0] = inst_add_w | inst_addi_w | inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w 
-                    | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i;
+                    | inst_st_b | inst_st_h | inst_st_w | inst_jirl | inst_bl | inst_pcaddu12i |inst_CACOP1;
 assign alu_op[ 1] = inst_sub_w;
 assign alu_op[ 2] = inst_slt|inst_slti;
 assign alu_op[ 3] = inst_sltu|inst_sltiu;
@@ -1096,7 +1098,8 @@ assign src2_is_imm   = inst_slli_w |
                        inst_andi   |
                        inst_ori    |
                        inst_xori   |
-                       inst_pcaddu12i;
+                       inst_pcaddu12i|
+                       inst_CACOP1;
 
 assign res_from_mem  = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w;
 assign dst_is_r1     = inst_bl;
@@ -1226,7 +1229,6 @@ end
 //将一些后续控制信号从ID阶段传递下去
 reg inst_CACOP_EX;
 reg [4:0]code_EX;
-reg [31:0]CACOP_VPPN_EX;
 always @(posedge clk) begin //寄存器控制
     if(reset) begin
         is_csr_EX <= 1'b0;
@@ -1273,12 +1275,10 @@ always @(posedge clk) begin //访存控制
     if(reset) begin
         inst_CACOP_EX <= 1'b0;
         code_EX <= 5'h0;
-        CACOP_VPPN_EX <= 32'h0;
     end
     else if(EX_allowin && ID_valid && ID_readygo) begin
         inst_CACOP_EX <= inst_CACOP1;
         code_EX <= op_4_0;
-        CACOP_VPPN_EX <= CACOP_VPPN;
     end
 end
 /****************************************************************************/
@@ -1398,6 +1398,7 @@ assign data_mat_EX = pg ? (dmw_hit1 ? dmw_mat1 : s1_mat) : datm;
 reg inst_CACOP_MEM;
 reg [4:0]code_MEM;
 reg [31:0]CACOP_VPPN_MEM;
+reg [31:0]data_pa_CACOP_MEM;
 always @(posedge clk) begin//访存控制
     if(reset) begin
         data_valid_MEM <= 1'b0;
@@ -1435,11 +1436,13 @@ always @(posedge clk) begin//访存控制
         inst_CACOP_MEM <= 1'b0;
         code_MEM <= 5'h0;
         CACOP_VPPN_MEM <= 32'h0;
+        data_pa_CACOP_MEM <= 32'h0;
     end
     else if(MEM_allowin && EX_valid && EX_readygo) begin
         inst_CACOP_MEM <= inst_CACOP_EX;
         code_MEM <= code_EX;
-        CACOP_VPPN_MEM <= CACOP_VPPN_EX;
+        CACOP_VPPN_MEM <= alu_result;
+        data_pa_CACOP_MEM <= data_pa_CACOP;
     end
 end
 /****************************************************************************/
@@ -1457,13 +1460,13 @@ end
 //MEM流水级
 /****************************************************************************/
 //设置访存信号
-assign data_valid = !data_addr_rcv && data_valid_MEM && MEM_valid ||inst_CACOP_EX
-&&code_EX[2:0]==3'b1&&EX_valid;
+assign data_valid = !data_addr_rcv && data_valid_MEM && MEM_valid ||inst_CACOP_MEM
+&&code_MEM[2:0]==3'b1&&MEM_valid;
 assign data_op = data_op_MEM && MEM_valid ; // - 小补丁，防止后续埋雷
 assign data_addr = data_addr_MEM;
-assign data_tag =(inst_CACOP_EX&&EX_valid)?data_pa_CACOP[31:12]: data_addr[31:12];
-assign data_index = (inst_CACOP_EX&&EX_valid)?CACOP_VPPN_EX[11:4]: data_addr[11:4];
-assign data_offset = (inst_CACOP_EX&&EX_valid)?CACOP_VPPN_EX[3:0]: data_addr[3:0];
+assign data_tag =(inst_CACOP_MEM&&MEM_valid)?data_pa_CACOP_MEM[31:12]: data_addr[31:12];
+assign data_index = (inst_CACOP_MEM&&MEM_valid)?CACOP_VPPN_MEM[11:4]: data_addr[11:4];
+assign data_offset = (inst_CACOP_MEM&&MEM_valid)?CACOP_VPPN_MEM[3:0]: data_addr[3:0];
 assign data_mat = data_mat_MEM;
 
 assign data_addroffset = data_addr[1:0];//访存偏移

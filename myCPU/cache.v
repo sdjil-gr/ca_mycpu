@@ -191,7 +191,8 @@ always @(posedge clk) reset <= ~resetn;
     always @(*) begin
         case (wb_state)
             WB_IDLE: 
-                if((inst_CACOP_reg&&code_reg[4:3]==0)||(inst_CACOP_reg&&code_reg[4:3]==1)||(inst_CACOP_reg&&code_reg[4:3]==2&&(hit_way[0]||hit_way[1])))
+                if((inst_CACOP_reg&&code_reg[4:3]==0)||(inst_CACOP_reg&&code_reg[4:3]==1)||
+                (inst_CACOP_reg&&code_reg[4:3]==2&&(hit_way[0]||hit_way[1])))
                     wb_next_state = WB_TAGV;
                 else if(hit_write)
                     wb_next_state = WB_WRITE;
