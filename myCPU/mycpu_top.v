@@ -83,6 +83,9 @@ wire [19:0] inst_tag;
 wire [ 7:0] inst_index;
 wire [ 3:0] inst_offset;
 wire        inst_mat;
+wire        inst_CACOP;
+wire  [4:0] code;
+wire  [31:0]CACOP_VPPN;
 wire [ 3:0] inst_wstrb = 4'b1111;
 wire [31:0] inst_wdata = 32'h0;
 wire        inst_addr_ok;
@@ -111,6 +114,9 @@ cpu_core u_cpu_core (
     .inst_index(inst_index),
     .inst_offset(inst_offset),
     .inst_mat(inst_mat),
+    .inst_CACOP(inst_CACOP),
+    .code(code),
+    .CACOP_VPPN(CACOP_VPPN),
     // .inst_wsttb(inst_wsttb),
     // .inst_wdata(inst_wdata),
     .inst_addr_ok(inst_addr_ok),
@@ -150,7 +156,10 @@ wire [31:0] inst_wr_addr;
 wire [ 3:0] inst_wr_wstrb;
 wire [127:0] inst_wr_data;
 wire        inst_wr_rdy = 1'b1;
-
+wire        inst_CACOP1;
+wire        inst_CACOP2;
+assign inst_CACOP1 = inst_CACOP&&code[2:0]==0;
+assign inst_CACOP2 = inst_CACOP&&code[2:0]==1;
 cache u_icache (
     .clk(aclk),
     .resetn(aresetn),
@@ -180,7 +189,11 @@ cache u_icache (
     .wr_addr(inst_wr_addr),
     .wr_wstrb(inst_wr_wstrb),
     .wr_data(inst_wr_data),
-    .wr_rdy(inst_wr_rdy)
+    .wr_rdy(inst_wr_rdy),
+
+    .inst_CACOP(inst_CACOP1),
+    .code(code),
+    .CACOP_VPPN(CACOP_VPPN)
 );
 
 // dcache interface
@@ -228,7 +241,11 @@ cache u_dcache (
     .wr_addr(data_wr_addr),
     .wr_wstrb(data_wr_wstrb),
     .wr_data(data_wr_data),
-    .wr_rdy(data_wr_rdy)
+    .wr_rdy(data_wr_rdy),
+
+    .inst_CACOP(inst_CACOP2),
+    .code(code),
+    .CACOP_VPPN(CACOP_VPPN)
 );
 
 

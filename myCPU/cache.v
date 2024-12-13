@@ -29,7 +29,11 @@ module cache(
     output[31:0]  wr_addr,
     output[ 3:0]  wr_wstrb,
     output[127:0] wr_data,
-    input         wr_rdy
+    input         wr_rdy,
+
+    input       inst_CACOP,
+    input       [4:0]      code,
+    input       [31:0]     CACOP_VPPN
 );
 reg         reset;
 always @(posedge clk) reset <= ~resetn;
@@ -46,10 +50,10 @@ always @(posedge clk) reset <= ~resetn;
 
 //wirte buffer 状态机
 
-    parameter WB_IDLE = 2'b10;
-    parameter WB_WRITE = 2'b01;
-
-    reg [1:0] wb_state, wb_next_state;
+    parameter WB_IDLE = 3'b10;
+    parameter WB_WRITE = 3'b01;
+    parameter WB_TAGV = 3'b100;
+    reg [2:0] wb_state, wb_next_state;
 
 
 
@@ -62,6 +66,9 @@ always @(posedge clk) reset <= ~resetn;
     reg  [ 3:0] offset_reg;
     reg  [ 3:0] wstrb_reg;
     reg  [31:0] wdata_reg;
+    reg         inst_CACOP_reg;
+    reg  [4:0]  code_reg;
+    reg  [31:0] CACOP_VPPN_reg;
 
     // write buffer
     reg         wrbuf_way;
@@ -81,7 +88,7 @@ always @(posedge clk) reset <= ~resetn;
 
     wire         tagv_we          [1:0];
     wire [ 7:0]  tagv_addr;
-    wire [20:0]  tagv_wdata;
+    wire [20:0]  tagv_wdata       [1:0];
     wire [20:0]  tagv_rdata       [1:0];
     wire [ 3:0]  data_bank_we    [1:0][3:0];
     wire [ 7:0]  data_bank_addr  [3:0];
@@ -113,7 +120,14 @@ always @(posedge clk) reset <= ~resetn;
                     next_state = IDLE;
 
             LOOKUP:
-                if(!mat_reg) begin
+                if(inst_CACOP_reg)begin
+                if((code_reg[4:3]==2&&(hit_way[0]&&dirty_arr[0][index_reg]||hit_way[1]&&dirty_arr[1][index_reg])||
+                code_reg[4:3]==1&&(dirty_arr[0][index_reg]||dirty_arr[1][index_reg]))&&code_reg[2:0]==1)
+                    next_state = MISS;
+                else 
+                    next_state = IDLE;
+                end
+                else if(!mat_reg) begin
                     if(op_reg)
                         next_state = MISS;
                     else
@@ -130,7 +144,9 @@ always @(posedge clk) reset <= ~resetn;
                     next_state = MISS;
 
             MISS:
-                if(~wr_rdy)
+                if(inst_CACOP_reg)
+                    next_state = IDLE;
+                else if(~wr_rdy)
                     next_state = MISS;
                 else begin
                     if(!mat_reg)
@@ -175,7 +191,9 @@ always @(posedge clk) reset <= ~resetn;
     always @(*) begin
         case (wb_state)
             WB_IDLE: 
-                if(hit_write)
+                if((inst_CACOP_reg&&code_reg[4:3]==0)||(inst_CACOP_reg&&code_reg[4:3]==1)||(inst_CACOP_reg&&code_reg[4:3]==2&&(hit_way[0]||hit_way[1])))
+                    wb_next_state = WB_TAGV;
+                else if(hit_write)
                     wb_next_state = WB_WRITE;
                 else
                     wb_next_state = WB_IDLE;
@@ -185,7 +203,8 @@ always @(posedge clk) reset <= ~resetn;
                     wb_next_state = WB_WRITE;
                 else
                     wb_next_state = WB_IDLE;
-
+            WB_TAGV:
+                wb_next_state = WB_IDLE;
             default: 
                 wb_next_state = WB_IDLE;
         endcase
@@ -193,10 +212,13 @@ always @(posedge clk) reset <= ~resetn;
 // request buffer
 always @(posedge clk) begin
         if(reset)
-            {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg} <= 70'b0;
+            {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg, inst_CACOP_reg, code_reg, CACOP_VPPN_reg}<= 108'b0;
         else if(valid & addr_ok)
-            {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg}
-                                 <= {op, mat, index, tag, offset, wstrb, wdata};
+            {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg , inst_CACOP_reg, code_reg, CACOP_VPPN_reg}
+                                 <= {op, mat, index, tag, offset, wstrb, wdata , inst_CACOP, code, CACOP_VPPN};
+        else if(wb_state == WB_TAGV)
+            {op_reg, mat_reg, index_reg, tag_reg, offset_reg, wstrb_reg, wdata_reg, inst_CACOP_reg, code_reg, CACOP_VPPN_reg}
+                                 <= {op, mat, index, tag, offset, wstrb, wdata , inst_CACOP, code, CACOP_VPPN};
     end
 
 // write buffer
@@ -225,13 +247,19 @@ always @(posedge clk) begin
     generate
         for(way = 0; way < `CACHE_WAY   ; way = way + 1) begin: tag_value
             assign hit_way[way] = tagv_rdata[way][0] && (tagv_rdata[way][20:1] == tag_reg);
-            assign tagv_we[way] = mat_reg && ret_valid && ret_last && (replace_way[index_reg] == way);
+            assign tagv_we[way] = (mat_reg && ret_valid && ret_last && (replace_way[index_reg] == way)) ||
+                                  (wb_state == WB_TAGV&&((inst_CACOP_reg&&code_reg[4:3]==0)||(inst_CACOP_reg&&code_reg[4:3]==1)||(inst_CACOP_reg&&code_reg[4:3]==2&&hit_way[way])));
         end
     endgenerate
     assign cache_hit = |hit_way && mat_reg;
 
-    assign tagv_addr  = (state == IDLE || state == LOOKUP) && (valid && addr_ok)? index : index_reg;
-    assign tagv_wdata = {tag_reg, 1'b1};
+    assign tagv_addr  =(wb_state == WB_TAGV&&inst_CACOP_reg)?index_reg: (state == IDLE || state == LOOKUP) && (valid && addr_ok)? index : index_reg;
+    assign tagv_wdata[0] = (inst_CACOP_reg&&code_reg[4:3]==0&&wb_state==WB_TAGV)?{20'b0, tagv_rdata[0][0]}:
+                       (inst_CACOP_reg&&(code_reg[4:3]==1||code_reg[4:3]==2)&&wb_state==WB_TAGV)?{tagv_rdata[0][20:1], 1'b0}:
+                       {tag_reg, 1'b1};
+    assign tagv_wdata[1] = (inst_CACOP_reg&&code_reg[4:3]==0&&wb_state==WB_TAGV)?{20'b0, tagv_rdata[1][0]}:
+                       (inst_CACOP_reg&&(code_reg[4:3]==1||code_reg[4:3]==2)&&wb_state==WB_TAGV)?{tagv_rdata[1][20:1], 1'b0}:
+                       {tag_reg, 1'b1};
 
     assign hit_write = (state == LOOKUP) && cache_hit && op_reg;// - 拉高addr_ok会导致传给data_bank的地址被立刻更新，从而错误
     assign hit_write_conflict = (hit_write || wb_state == WB_WRITE) && valid && ~op;
@@ -290,7 +318,7 @@ always @(posedge clk) begin
                 .clka (clk),
                 .wea  (tagv_we[way]),
                 .addra(tagv_addr),
-                .dina (tagv_wdata),
+                .dina (tagv_wdata[way]),
                 .douta(tagv_rdata[way]),
                 .ena  (1'b1)
             );
@@ -323,10 +351,16 @@ always @(posedge clk) begin
 
     // write port
     assign wr_req   = (state == MISS) && wr_rdy;
-    assign wr_type  = mat_reg ? 3'b100 : 3'b010;
-    assign wr_addr  = mat_reg ? {tagv_rdata[replace_way[index_reg]][20:1], index_reg, 4'b0} : {tag_reg, index_reg, offset_reg};
-    assign wr_wstrb = mat_reg ? 4'hf : wstrb_reg;
-    assign wr_data  =  mat_reg ? {data_bank_rdata[replace_way[index_reg]][3], data_bank_rdata[replace_way[index_reg]][2],
+    assign wr_type  = (inst_CACOP_reg )?3'b100:mat_reg ? 3'b100 : 3'b010;
+    assign wr_addr  =((inst_CACOP_reg &&dirty_arr[1][index_reg]&&code_reg[4:3]==2 && hit_way[1])||(inst_CACOP_reg &&dirty_arr[1][index_reg]&&code_reg[4:3]==1))?{tagv_rdata[1][20:1], index_reg, 4'b0} :
+                      ((inst_CACOP_reg &&dirty_arr[0][index_reg]&&code_reg[4:3]==2 && hit_way[0]||(inst_CACOP_reg &&dirty_arr[0][index_reg]&&code_reg[4:3]==1)))?{tagv_rdata[0][20:1], index_reg, 4'b0} :
+                      mat_reg ? {tagv_rdata[replace_way[index_reg]][20:1], index_reg, 4'b0} : {tag_reg, index_reg, offset_reg};
+    assign wr_wstrb = (inst_CACOP_reg )? 4'hf : mat_reg ? 4'hf : wstrb_reg;
+    assign wr_data  = ((inst_CACOP_reg &&dirty_arr[1][index_reg]&&code_reg[4:3]==2 && hit_way[1])||(inst_CACOP_reg &&dirty_arr[1][index_reg]&&code_reg[4:3]==1))?{data_bank_rdata[1][3], data_bank_rdata[1][2],
+                       data_bank_rdata[1][1], data_bank_rdata[1][0]}: 
+                       ((inst_CACOP_reg &&dirty_arr[0][index_reg]&&code_reg[4:3]==2 && hit_way[0])||(inst_CACOP_reg &&dirty_arr[0][index_reg]&&code_reg[4:3]==1))?{data_bank_rdata[0][3], data_bank_rdata[0][2],
+                       data_bank_rdata[0][1], data_bank_rdata[0][0]}:
+                      mat_reg ? {data_bank_rdata[replace_way[index_reg]][3], data_bank_rdata[replace_way[index_reg]][2],
                        data_bank_rdata[replace_way[index_reg]][1], data_bank_rdata[replace_way[index_reg]][0]} : wdata_reg;
 
 endmodule

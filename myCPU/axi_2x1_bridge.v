@@ -87,7 +87,7 @@ always @(posedge clk) begin
     if (reset) begin
         rd_req <= 0;
     end
-    else if((rd_req0 || rd_req1) && !rd_req) begin
+    else if((rd_req0 || rd_req1) && !wr_req && !rd_req) begin
         rd_req <= 1;
     end
     else if(axi_rd_rps) begin
@@ -111,7 +111,7 @@ always @(posedge clk) begin
     if (reset) begin
         wr_req <= 0;
     end
-    else if((wr_req1) && !wr_req) begin
+    else if((wr_req1) && !wr_req && !rd_req) begin
         wr_req <= 1;
     end
     else if(axi_wr_rps) begin
@@ -220,18 +220,18 @@ assign axi_wr_rps = wr_addr_rcv && wr_data_rcv && (bvalid && bready);
 
 
 //icache interface
-assign rd_rdy0 = !rd_req && !rd_req1;
+assign rd_rdy0 = !wr_req && !rd_req && !rd_req1 && !wr_req1;
 assign ret_valid0 = !rd_req_id && rd_addr_rcv && rvalid;
 assign ret_last0 = !rd_req_id && rd_addr_rcv && rlast;
 assign ret_data0 = rdata;
 
 //dcache interface
-assign rd_rdy1 = !rd_req;
+assign rd_rdy1 = !wr_req && !rd_req;
 assign ret_valid1 = rd_req_id && rd_addr_rcv && rvalid;
 assign ret_last1 = rd_req_id && rd_addr_rcv && rlast;
 assign ret_data1 = rdata;
 
-assign wr_rdy1 = !wr_req;
+assign wr_rdy1 = !wr_req && !rd_req;
 
 //axi interface
 assign arid = {3'b0, rd_req_id}; // 0 for inst; 1 for data
