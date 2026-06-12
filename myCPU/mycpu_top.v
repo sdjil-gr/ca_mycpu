@@ -177,6 +177,23 @@ wire [ 8:0] wb_esubcode;
 wire [31:0] ex_entry;
 wire [31:0] ex_epc;
 
+// ==== 规范做法：异常标记随指令逐级流动 ====
+// 异常信息（syscall 等）
+reg        exc_valid_EX,  exc_valid_MEM,  exc_valid_WB;
+reg  [5:0] exc_ecode_EX,  exc_ecode_MEM,  exc_ecode_WB;
+reg [31:0] exc_epc_EX,    exc_epc_MEM,    exc_epc_WB;
+// ertn 信息（CSR 恢复延后到 WB）
+reg        ertn_valid_EX, ertn_valid_MEM, ertn_valid_WB;
+reg [31:0] ertn_target_EX,ertn_target_MEM,ertn_target_WB;
+
+// 全局流水线冲刷（异常/ertn 在 WB 提交时触发）
+wire exc_flush;
+wire ertn_flush_wb;
+wire pipeline_flush;
+
+
+localparam ECODE_SYS = 6'h0b;
+
 wire        need_ui5;
 wire        need_si12;
 wire        need_ui12;
@@ -274,11 +291,11 @@ assign WB_readygo = 1'b1;
 assign ID_allowin = (!ID_valid  || EX_allowin  && ID_readygo )&&valid;
 assign EX_allowin = (!EX_valid  || MEM_allowin  && EX_readygo )&&valid;
 assign MEM_allowin = (!MEM_valid  || WB_allowin && MEM_readygo )&&valid;
-assign WB_allowin =(!WB_valid || WB_allowin  && WB_readygo)&&valid;
+assign WB_allowin =(!WB_valid || WB_readygo)&&valid;
 
 //流水级控制
 always @(posedge clk) begin
-    if (reset)
+    if (reset || pipeline_flush || (inst_syscall || inst_ertn)&& ID_valid && ID_readygo && EX_allowin)
 		ID_valid <= 1'b0;
     else if (br_taken && ID_allowin)//分支跳转则把预取的错误指令取消
         ID_valid <= 1'b0;
@@ -286,19 +303,19 @@ always @(posedge clk) begin
 		ID_valid <= 1'b1;
 end
 always @(posedge clk) begin
-	if (reset)
+	if (reset || pipeline_flush)
 		EX_valid <= 1'b0;
 	else if(EX_allowin)
 		EX_valid <= ID_valid && ID_readygo;
 end
 always @(posedge clk) begin
-	if (reset)
+	if (reset || pipeline_flush)
 		MEM_valid <= 1'b0;
 	else if(MEM_allowin)
 		MEM_valid <= EX_valid && EX_readygo;
 end
 always @(posedge clk) begin
-	if (reset)
+	if (reset || pipeline_flush)
 		WB_valid <= 1'b0;
 	else if(WB_allowin)
 		WB_valid <= MEM_valid && MEM_readygo;
@@ -315,6 +332,12 @@ assign nextpc       = valid_r ? (br_taken ? br_target : seq_pc) : seq_pc;
 always @(posedge clk) begin
     if (reset) begin
         pc <= 32'h1c000000;     //trick: to make nextpc be 0x1c000000 during reset 
+    end
+    else if (exc_flush) begin
+        pc <= ex_entry;         // 异常：跳转入口
+    end
+    else if (ertn_flush_wb) begin
+        pc <= ertn_target_WB;   // ertn：跳转返回地址
     end
     else if(ID_allowin)begin
         pc <= nextpc;
@@ -355,9 +378,14 @@ assign csr_wmask = (inst_csrwr)? 32'hffffffff :
                     (inst_csrxchg)? rj_value : 32'h00000000;
 assign csr_wvalue = rkd_value;
 
-assign wb_ex = inst_syscall && ID_valid && ID_readygo;
-assign ertn_flush = inst_ertn && ID_valid && ID_readygo;
-assign wb_ecode = 6'hb;
+// 异常/ertn 在 WB 级提交，不再在 ID 级触发
+assign exc_flush      = exc_valid_WB && WB_valid && WB_allowin;
+assign ertn_flush_wb  = ertn_valid_WB && WB_valid && WB_allowin;
+assign pipeline_flush  = exc_flush || ertn_flush_wb;
+
+assign wb_ex     = exc_flush;
+assign ertn_flush = ertn_flush_wb;
+assign wb_ecode  = exc_ecode_WB;
 assign wb_esubcode = 9'h0;
 
 csr u_csr(
@@ -373,7 +401,7 @@ csr u_csr(
     .ertn_flush(ertn_flush),
     .wb_ecode(wb_ecode),
     .wb_esubcode(wb_esubcode),
-    .wb_pc(pc_ID),
+    .wb_pc(exc_flush ? exc_epc_WB : pc_WB),
     .ex_entry(ex_entry),
     .ex_epc(ex_epc)
 );
@@ -628,12 +656,8 @@ assign br_taken = (   inst_beq  &&  rj_eq_rd
                    || inst_jirl
                    || inst_bl
                    || inst_b
-                   || inst_ertn
-                   || inst_syscall
                   ) && ID_valid;
 assign br_target =  (inst_beq || inst_bne || inst_bl || inst_b || inst_blt || inst_bge || inst_bltu || inst_bgeu) ? (pc_ID + br_offs) :
-                    (inst_ertn)?ex_epc:
-                    (inst_syscall)?ex_entry:
                     (rj_value + jirl_offs); /*inst_jirl*/
 /******** 分支判断块 ********/
 
@@ -645,7 +669,7 @@ assign div_signed = inst_div_w | inst_mod_w;
 assign div_unsigned = inst_div_wu | inst_mod_wu;
 assign get_div_or_mod = inst_div_w | inst_div_wu;
 
-assign data_sram_en_ID    = inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w;
+assign data_sram_en_ID    = (inst_ld_b | inst_ld_h | inst_ld_bu | inst_ld_hu | inst_ld_w | inst_st_b | inst_st_h | inst_st_w) && ID_valid;
 assign data_sram_we_ID    = {4{inst_st_w}} | {2'b00, {2{inst_st_h}}} | {3'b000, inst_st_b};
 assign data_sram_wdata_ID = inst_st_b ? {4{rkd_value[ 7:0]}} :
                             inst_st_h ? {2{rkd_value[15:0]}} :
@@ -706,6 +730,38 @@ always @(posedge clk) begin //访存控制
         data_sram_we_EX <= data_sram_we_ID;
         data_sram_wdata_EX <= data_sram_wdata_ID;
         data_sram_ld_tag_EX <= data_sram_ld_tag;
+    end
+end
+
+// 异常标记注入（ID→EX）
+always @(posedge clk) begin
+    if (reset) begin
+        exc_valid_EX <= 1'b0;
+        exc_ecode_EX <= 6'h0;
+        exc_epc_EX   <= 32'h0;
+    end
+    else if (ID_valid && EX_allowin && ID_readygo) begin
+        exc_valid_EX <= inst_syscall;
+        exc_ecode_EX <= ECODE_SYS;
+        exc_epc_EX   <= pc_ID;
+    end
+    else if (EX_allowin) begin
+        exc_valid_EX <= 1'b0;   // 气泡清除标记
+    end
+end
+
+// ertn 标记注入（ID→EX）：PC 重定向在 WB 做，CSR 恢复也在 WB
+always @(posedge clk) begin
+    if (reset) begin
+        ertn_valid_EX  <= 1'b0;
+        ertn_target_EX <= 32'h0;
+    end
+    else if (ID_valid && EX_allowin && ID_readygo) begin
+        ertn_valid_EX  <= inst_ertn;
+        ertn_target_EX <= ex_epc;
+    end
+    else if (EX_allowin) begin
+        ertn_valid_EX <= 1'b0;
     end
 end
 /****************************************************************************/
@@ -831,6 +887,38 @@ always @(posedge clk) begin//寄存器控制
         gr_we_MEM <= gr_we_EX;
     end
 end
+
+// 异常标记 EX→MEM
+always @(posedge clk) begin
+    if (reset) begin
+        exc_valid_MEM <= 1'b0;
+        exc_ecode_MEM <= 6'h0;
+        exc_epc_MEM   <= 32'h0;
+    end
+    else if (MEM_allowin && EX_valid && EX_readygo) begin
+        exc_valid_MEM <= exc_valid_EX;
+        exc_ecode_MEM <= exc_ecode_EX;
+        exc_epc_MEM   <= exc_epc_EX;
+    end
+    else if (MEM_allowin) begin
+        exc_valid_MEM <= 1'b0;
+    end
+end
+
+// ertn 标记 EX→MEM
+always @(posedge clk) begin
+    if (reset) begin
+        ertn_valid_MEM  <= 1'b0;
+        ertn_target_MEM <= 32'h0;
+    end
+    else if (MEM_allowin && EX_valid && EX_readygo) begin
+        ertn_valid_MEM  <= ertn_valid_EX;
+        ertn_target_MEM <= ertn_target_EX;
+    end
+    else if (MEM_allowin) begin
+        ertn_valid_MEM <= 1'b0;
+    end
+end
 /****************************************************************************/
 
 
@@ -846,7 +934,7 @@ end
 //MEM流水级
 /****************************************************************************/
 //设置访存信号
-assign data_sram_en = data_sram_en_MEM;
+assign data_sram_en = data_sram_en_MEM && MEM_valid;
 assign data_sram_we = data_sram_we_MEM;
 assign data_sram_addr = {data_sram_addr_MEM[31:2], 2'b00};//对齐地址
 assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
@@ -869,6 +957,38 @@ always @(posedge clk) begin
         gr_we_WB <= gr_we_MEM;
         data_sram_ld_tag_WB <= data_sram_ld_tag_MEM;
         data_sram_addroffset_WB <= data_sram_addroffset;
+    end
+end
+
+// 异常标记 MEM→WB
+always @(posedge clk) begin
+    if (reset) begin
+        exc_valid_WB <= 1'b0;
+        exc_ecode_WB <= 6'h0;
+        exc_epc_WB   <= 32'h0;
+    end
+    else if (WB_allowin && MEM_valid && MEM_readygo) begin
+        exc_valid_WB <= exc_valid_MEM;
+        exc_ecode_WB <= exc_ecode_MEM;
+        exc_epc_WB   <= exc_epc_MEM;
+    end
+    else if (WB_allowin) begin
+        exc_valid_WB <= 1'b0;
+    end
+end
+
+// ertn 标记 MEM→WB
+always @(posedge clk) begin
+    if (reset) begin
+        ertn_valid_WB  <= 1'b0;
+        ertn_target_WB <= 32'h0;
+    end
+    else if (WB_allowin && MEM_valid && MEM_readygo) begin
+        ertn_valid_WB  <= ertn_valid_MEM;
+        ertn_target_WB <= ertn_target_MEM;
+    end
+    else if (WB_allowin) begin
+        ertn_valid_WB <= 1'b0;
     end
 end
 
