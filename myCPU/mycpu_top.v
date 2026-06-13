@@ -934,7 +934,7 @@ end
 //MEM流水级
 /****************************************************************************/
 //设置访存信号
-assign data_sram_en = data_sram_en_MEM && MEM_valid;
+assign data_sram_en = data_sram_en_MEM && MEM_valid && !pipeline_flush;//访存使能信号在MEM阶段产生，且需要MEM阶段指令有效且不被刷新
 assign data_sram_we = data_sram_we_MEM;
 assign data_sram_addr = {data_sram_addr_MEM[31:2], 2'b00};//对齐地址
 assign data_sram_addroffset = data_sram_addr_MEM[1:0];//访存偏移
